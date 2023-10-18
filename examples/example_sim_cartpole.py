@@ -52,7 +52,7 @@ class Example:
             articulation_builder,
             xform=wp.transform(np.zeros(3), wp.quat_from_axis_angle((1.0, 0.0, 0.0), -math.pi * 0.5)),
             floating=False,
-            density=100,
+            density=0,
             armature=0.1,
             stiffness=0.0,
             damping=0.0,
@@ -84,7 +84,7 @@ class Example:
         self.model.joint_attach_ke = 1600.0
         self.model.joint_attach_kd = 20.0
 
-        self.integrator = wp.sim.SemiImplicitIntegrator()
+        self.integrator = self.model.integrator = wp.sim.SemiImplicitIntegrator()
 
         # -----------------------
         # set up Usd renderer
@@ -133,7 +133,7 @@ class Example:
                 if self.enable_rendering:
                     with wp.ScopedTimer("render", active=True):
                         self.render()
-                    self.renderer.save()
+                    # self.renderer.save()
 
             wp.synchronize()
 

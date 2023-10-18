@@ -30,8 +30,8 @@ wp.init()
 class Example:
     frame_dt = 1.0 / 60.0
 
-    episode_duration = 20.0  # seconds
-    episode_frames = int(episode_duration / frame_dt)
+    episode_duration = 6.0      # seconds
+    episode_frames = int(episode_duration/frame_dt)
 
     sim_substeps = 10
     sim_dt = frame_dt / sim_substeps
@@ -46,7 +46,7 @@ class Example:
 
         self.num_bodies = 8
         self.scale = 0.8
-        self.ke = 1.0e5
+        self.ke = 1.e+2
         self.kd = 250.0
         self.kf = 500.0
 
@@ -95,12 +95,33 @@ class Example:
         # meshes
         bunny = self.load_mesh(os.path.join(os.path.dirname(__file__), "assets/bunny.usd"), "/bunny/bunny")
         for i in range(self.num_bodies):
-            b = builder.add_body(
-                origin=wp.transform(
-                    (i * 0.5 * self.scale, 1.0 + i * 1.7 * self.scale, 4.0 + i * 0.5 * self.scale),
-                    wp.quat_from_axis_angle((0.0, 1.0, 0.0), math.pi * 0.1 * i),
+            
+            b = builder.add_body(origin=wp.transform(
+                (i*0.5*self.scale, 1.0 + i*1.7*self.scale, 4.0 + i*0.5*self.scale),
+                wp.quat_from_axis_angle((0.0, 1.0, 0.0), math.pi*0.1*i)))
+
+            s = builder.add_shape_mesh(
+                    body=b,
+                    mesh=bunny,
+                    pos=(0.0, 0.0, 0.0),
+                    scale=(self.scale*1.73, self.scale*0.73, self.scale*0.73),
+                    ke=self.ke,
+                    kd=self.kd,
+                    kf=self.kf,
+                    # density=1e0,
+                    thickness=0.0
                 )
-            )
+            
+        # ground box
+        builder.add_shape_box(
+            pos=(0.0, 0.0, 0.0),
+            hx=10.0*self.scale,
+            hy=0.1*self.scale,
+            hz=10.0*self.scale,
+            body=-1,
+            ke=self.ke,
+            kd=self.kd,
+            kf=self.kf)
 
             s = builder.add_shape_mesh(
                 body=b,
@@ -117,11 +138,14 @@ class Example:
         self.model = builder.finalize()
         self.model.ground = True
 
+        self.model.joint_attach_ke = 1600.0
+        self.model.joint_attach_kd = 20.0
+
         self.integrator = wp.sim.SemiImplicitIntegrator()
 
         # -----------------------
-        # set up OpenGL renderer
-        if self.enable_rendering:
+        # set up Usd renderer
+        if (self.enable_rendering):
             self.renderer = wp.sim.render.SimRendererOpenGL(self.model, stage, scaling=0.5)
 
     def load_mesh(self, filename, path):
@@ -168,17 +192,22 @@ class Example:
         graph = wp.capture_end()
 
         # simulate
-        with wp.ScopedTimer("simulate", detailed=False, print=False, active=True, dict=profiler):
+        with wp.ScopedTimer("simulate", detailed=False, print=False, active=False, dict=profiler):
+
             for f in range(0, self.episode_frames):
-                with wp.ScopedTimer("simulate", active=True):
+                
+                with wp.ScopedTimer("simulate", active=False):
                     wp.capture_launch(graph)
                 self.sim_time += self.frame_dt
 
-                if self.enable_rendering:
-                    with wp.ScopedTimer("render", active=True):
+                if (self.enable_rendering):
+
+                    with wp.ScopedTimer("render", active=False):
                         self.render()
 
             wp.synchronize()
+
+        self.renderer.save()
 
 
 stage = os.path.join(os.path.dirname(__file__), "outputs/example_sim_rigid_contact.usd")

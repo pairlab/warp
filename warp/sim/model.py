@@ -8,23 +8,21 @@
 """A module for building simulation models and state.
 """
 
-import copy
-import math
-from typing import List, Optional, Tuple
-
-import numpy as np
+from .inertia import transform_inertia
+from .inertia import compute_cone_inertia
+from .inertia import compute_cylinder_inertia
+from .inertia import compute_capsule_inertia
+from .inertia import compute_box_inertia
+from .inertia import compute_sphere_inertia
+from .inertia import compute_mesh_inertia
 
 import warp as wp
+import numpy as np
 
-from .inertia import (
-    compute_box_inertia,
-    compute_capsule_inertia,
-    compute_cone_inertia,
-    compute_cylinder_inertia,
-    compute_mesh_inertia,
-    compute_sphere_inertia,
-    transform_inertia,
-)
+import math
+import copy
+
+from typing import List, Optional, Tuple
 
 Vec3 = List[float]
 Vec4 = List[float]
@@ -99,7 +97,7 @@ class JointAxis:
 
     Attributes:
 
-        axis (3D vector): The axis that this JointAxis object describes
+        axis (3D vector): The axis that this JointAxis object describes 
         limit_lower (float): The lower limit of the joint axis
         limit_upper (float): The upper limit of the joint axis
         limit_ke (float): The elastic stiffness of the joint axis limits, only respected by SemiImplicitIntegrator
@@ -136,30 +134,6 @@ class JointAxis:
         self.target_ke = target_ke
         self.target_kd = target_kd
         self.mode = mode
-
-
-class SDF:
-    # Describes a signed distance field for simulation
-    #
-    #    Attributes:
-    #
-    #        Either a NanoVDB file name or a numpy array
-    #
-    def __init__(self, volume=None, I=np.eye(3, dtype=np.float32), mass=1.0, com=np.array((0.0, 0.0, 0.0))):
-        self.volume = volume
-
-        # Need to specify these for now
-        self.has_inertia = True
-        self.is_solid = True
-        self.mass = mass
-        self.com = com
-        self.I = I
-
-    def finalize(self, device=None):
-        return self.volume.id
-
-    def __hash__(self):
-        return hash((self.volume.id))
 
 
 class Mesh:
@@ -200,6 +174,14 @@ class Mesh:
             self.mass = 1.0
             self.com = np.array((0.0, 0.0, 0.0))
 
+    def remesh(self, recompute_inertia=True, **remeshing_kwargs):
+        self.vertices, self.indices = wp.sim.remesh(self.vertices, self.indices.reshape(-1, 3), **remeshing_kwargs)
+        self.indices = self.indices.flatten()
+        if recompute_inertia:
+            self.mass, self.com, self.I, _ = compute_mesh_inertia(
+                1.0, self.vertices, self.indices, is_solid=self.is_solid
+            )
+
     # construct simulation ready buffers from points
     def finalize(self, device=None):
         with wp.ScopedDevice(device):
@@ -236,6 +218,8 @@ class State:
         body_qd (wp.array): Tensor of body velocities
         body_f (wp.array): Tensor of body forces
 
+        has_rigid_contact_vars (bool): Indicates whether the state has rigid contact variables (default False, contact variables are stored only in the state if needed for differentiable simulation, i.e. model.requires_grad==True, otherwise the contact variables are stored in the Model)
+
     """
 
     def __init__(self):
@@ -250,6 +234,8 @@ class State:
         self.body_qd = None
         self.body_f = None
 
+        self.has_rigid_contact_vars = False
+
     def clear_forces(self):
         if self.particle_count:
             self.particle_f.zero_()
@@ -257,21 +243,23 @@ class State:
         if self.body_count:
             self.body_f.zero_()
 
-    def flatten(self):
-        wp.utils.warn(
-            "Model.flatten() will be removed in a future Warp version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+            self.joint_act.zero_()
 
-        arrays = []
+    def flatten(self):
+        """Returns a list of Tensors stored by the state
+
+        This function is intended to be used internal-only but can be used to obtain
+        a set of all tensors owned by the state.
+        """
+
+        tensors = []
 
         # build a list of all tensor attributes
         for attr, value in self.__dict__.items():
-            if isinstance(value, wp.array):
-                arrays.append(value)
+            if wp.is_tensor(value):
+                tensors.append(value)
 
-        return arrays
+        return tensors
 
 
 def compute_shape_mass(type, scale, src, density, is_solid, thickness):
@@ -317,7 +305,7 @@ def compute_shape_mass(type, scale, src, density, is_solid, thickness):
         else:
             hollow = compute_cone_inertia(density, r - thickness, h - 2.0 * thickness)
             return solid[0] - hollow[0], solid[1], solid[2] - hollow[2]
-    elif type == GEO_MESH or type == GEO_SDF:
+    elif type == GEO_MESH:
         if src.has_inertia and src.mass > 0.0 and src.is_solid == is_solid:
             m, c, I = src.mass, src.com, src.I
 
@@ -339,7 +327,7 @@ def compute_shape_mass(type, scale, src, density, is_solid, thickness):
             I_new = np.array([[Ixx, Ixy, Ixz], [Ixy, Iyy, Iyz], [Ixz, Iyz, Izz]])
 
             return m_new, c_new, I_new
-        elif type == GEO_MESH:
+        else:
             # fall back to computing inertia from mesh geometry
             vertices = np.array(src.vertices) * np.array(scale[:3])
             m, c, I, vol = compute_mesh_inertia(density, vertices, src.indices, is_solid, thickness)
@@ -371,7 +359,6 @@ class Model:
         particle_adhesion (wp.array): Particle adhesion strength, shape [particle_count], float
         particle_grid (HashGrid): HashGrid instance used for accelerated simulation of particle interactions
         particle_flags (wp.array): Particle enabled state, shape [particle_count], bool
-        particle_max_velocity (float): Maximum particle velocity (to prevent instability)
 
         shape_transform (wp.array): Rigid shape transforms, shape [shape_count, 7], float
         shape_body (wp.array): Rigid shape body index, shape [shape_count], int
@@ -399,7 +386,7 @@ class Model:
         tri_activations (wp.array): Triangle element activations, shape [tri_count], float
         tri_materials (wp.array): Triangle element materials, shape [tri_count, 5], float
 
-        edge_indices (wp.array): Bending edge indices, shape [edge_count*4], int
+        edge_indices (wp.array): Bending edge indices, shape [edge_count*2], int
         edge_rest_angle (wp.array): Bending edge rest angle, shape [edge_count], float
         edge_bending_properties (wp.array): Bending edge stiffness and damping parameters, shape [edge_count, 2], float
 
@@ -456,6 +443,9 @@ class Model:
         soft_contact_mu (float): Friction coefficient of soft contacts
         soft_contact_restitution (float): Restitution coefficient of soft contacts (used by XPBDIntegrator)
 
+        rigid_contact_max (int): Maximum number of potential rigid body contact points to generate ignoring the `rigid_mesh_contact_max` limit.
+        rigid_contact_max_limited (int): Maximum number of potential rigid body contact points to generate respecting the `rigid_mesh_contact_max` limit.
+        rigid_mesh_contact_max (int): Maximum number of rigid body contact points to generate per mesh (0 = unlimited)
         rigid_contact_margin (float): Contact margin for generation of rigid body contacts
         rigid_contact_torsional_friction (float): Torsional friction coefficient for rigid body contacts (used by XPBDIntegrator)
         rigid_contact_rolling_friction (float): Rolling friction coefficient for rigid body contacts (used by XPBDIntegrator)
@@ -488,7 +478,7 @@ class Model:
         desired.
     """
 
-    def __init__(self, device=None):
+    def __init__(self, device=None, integrator=None):
         self.requires_grad = False
         self.num_envs = 0
 
@@ -506,7 +496,6 @@ class Model:
         self.particle_adhesion = 0.0
         self.particle_grid = None
         self.particle_flags = None
-        self.particle_max_velocity = 1e5
 
         self.shape_transform = None
         self.shape_body = None
@@ -593,6 +582,9 @@ class Model:
         self.soft_contact_mu = 0.5
         self.soft_contact_restitution = 0.0
 
+        self.rigid_contact_max = 0
+        self.rigid_contact_max_limited = 0
+        self.rigid_mesh_contact_max = 0
         self.rigid_contact_margin = None
         self.rigid_contact_torsional_friction = None
         self.rigid_contact_rolling_friction = None
@@ -619,6 +611,7 @@ class Model:
         self.joint_coord_count = 0
 
         self.device = wp.get_device(device)
+        self.integrator = integrator
 
     def state(self, requires_grad=None) -> State:
         """Returns a state object for the model
@@ -630,6 +623,7 @@ class Model:
         s = State()
         if requires_grad is None:
             requires_grad = self.requires_grad
+        s.requires_grad = requires_grad
 
         s.particle_count = self.particle_count
         s.body_count = self.body_count
@@ -653,13 +647,24 @@ class Model:
             s.body_qd = wp.clone(self.body_qd)
             s.body_f = wp.zeros_like(self.body_qd)
 
-            s.body_deltas = wp.zeros(
-                self.body_count, dtype=wp.spatial_vector, device=s.body_q.device, requires_grad=requires_grad
-            )
-
             s.body_q.requires_grad = requires_grad
             s.body_qd.requires_grad = requires_grad
             s.body_f.requires_grad = requires_grad
+
+            if requires_grad and self.rigid_contact_max:
+                # allocate contact variables on the state to ensure contact gradients are preserved
+                # across all simulation steps
+                self._allocate_rigid_contacts(s, self.rigid_contact_max, requires_grad=True)
+                s.has_rigid_contact_vars = True
+
+            s.joint_act = wp.zeros_like(self.joint_act, requires_grad=requires_grad)
+
+        if self.integrator is None:
+            raise RuntimeError(
+                "No integrator was specified for the model, assign `model.integrator` to be able to create a state")
+
+        if self.integrator is not None and hasattr(self.integrator, "augment_state"):
+            self.integrator.augment_state(self, s)
 
         return s
 
@@ -673,8 +678,8 @@ class Model:
 
     def find_shape_contact_pairs(self):
         # find potential contact pairs based on collision groups and collision mask (pairwise filtering)
-        import copy
         import itertools
+        import copy
 
         filters = copy.copy(self.shape_collision_filter_pairs)
         for a, b in self.shape_collision_filter_pairs:
@@ -703,18 +708,26 @@ class Model:
 
     def count_contact_points(self):
         """
-        Counts the maximum number of contact points that need to be allocated.
+        Counts the maximum number of rigid contact points that need to be allocated.
+        This function returns two values corresponding to the maximum number of potential contacts
+        excluding the limiting from `Model.rigid_mesh_contact_max` and the maximum number of
+        contact points that may be generated when considering the `Model.rigid_mesh_contact_max` limit.
+
+        Returns:
+            potential_count (int): Potential number of contact points
+            actual_count (int): Actual number of contact points
         """
         from .collide import count_contact_points
 
         # calculate the potential number of shape pair contact points
-        contact_count = wp.zeros(1, dtype=wp.int32, device=self.device)
+        contact_count = wp.zeros(2, dtype=wp.int32, device=self.device)
         wp.launch(
             kernel=count_contact_points,
             dim=self.shape_contact_pair_count,
             inputs=[
                 self.shape_contact_pairs,
                 self.shape_geo,
+                self.rigid_mesh_contact_max,
             ],
             outputs=[contact_count],
             device=self.device,
@@ -727,106 +740,104 @@ class Model:
             inputs=[
                 self.shape_ground_contact_pairs,
                 self.shape_geo,
+                self.rigid_mesh_contact_max,
             ],
             outputs=[contact_count],
             device=self.device,
             record_tape=False,
         )
-        count = contact_count.numpy()[0]
-        return int(count)
+        counts = contact_count.numpy()
+        potential_count = int(counts[0])
+        actual_count = int(counts[1])
+        return potential_count, actual_count
 
-    def allocate_rigid_contacts(self, count=None, requires_grad=False):
+    def allocate_rigid_contacts(self, count=None, requires_grad=False, device=None):
+        import warnings
+
+        warnings.warn(
+            "Model.allocate_rigid_contacts() is deprecated and will be removed in a future Warp version. "
+            "It is not necessary anymore to allocate contact variables manually.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    def _allocate_rigid_contacts(self, target=None, count=None, limited_contact_count=None, requires_grad=False):
         if count is not None:
+            # potential number of contact points to consider
             self.rigid_contact_max = count
-        # serves as counter of the number of active contact points
-        self.rigid_contact_count = wp.zeros(1, dtype=wp.int32, device=self.device)
-        # contact point ID within the (shape_a, shape_b) contact pair
-        self.rigid_contact_point_id = wp.zeros(self.rigid_contact_max, dtype=wp.int32, device=self.device)
-        # ID of first rigid body
-        self.rigid_contact_body0 = wp.zeros(self.rigid_contact_max, dtype=wp.int32, device=self.device)
-        # ID of second rigid body
-        self.rigid_contact_body1 = wp.zeros(self.rigid_contact_max, dtype=wp.int32, device=self.device)
-        # position of contact point in body 0's frame before the integration step
-        self.rigid_contact_point0 = wp.zeros(
-            self.rigid_contact_max, dtype=wp.vec3, device=self.device, requires_grad=requires_grad
-        )
-        # position of contact point in body 1's frame before the integration step
-        self.rigid_contact_point1 = wp.zeros(
-            self.rigid_contact_max, dtype=wp.vec3, device=self.device, requires_grad=requires_grad
-        )
-        # moment arm before the integration step resulting from thickness displacement added to contact point 0 in body 0's frame (used in XPBD contact friction handling)
-        self.rigid_contact_offset0 = wp.zeros(
-            self.rigid_contact_max, dtype=wp.vec3, device=self.device, requires_grad=requires_grad
-        )
-        # moment arm before the integration step resulting from thickness displacement added to contact point 1 in body 1's frame (used in XPBD contact friction handling)
-        self.rigid_contact_offset1 = wp.zeros(
-            self.rigid_contact_max, dtype=wp.vec3, device=self.device, requires_grad=requires_grad
-        )
-        # contact normal in world frame
-        self.rigid_contact_normal = wp.zeros(
-            self.rigid_contact_max, dtype=wp.vec3, device=self.device, requires_grad=requires_grad
-        )
-        # combined thickness of both shapes
-        self.rigid_contact_thickness = wp.zeros(
-            self.rigid_contact_max, dtype=wp.float32, device=self.device, requires_grad=requires_grad
-        )
-        # ID of the first shape in the contact pair
-        self.rigid_contact_shape0 = wp.zeros(self.rigid_contact_max, dtype=wp.int32, device=self.device)
-        # ID of the second shape in the contact pair
-        self.rigid_contact_shape1 = wp.zeros(self.rigid_contact_max, dtype=wp.int32, device=self.device)
+        if limited_contact_count is not None:
+            self.rigid_contact_max_limited = limited_contact_count
+        if target is None:
+            target = self
 
-        # temporary variables used during the XPBD solver iterations:
-        # world space position of contact point resulting from applying current body 0 transform to its point0
-        self.rigid_active_contact_point0 = wp.zeros(
-            self.rigid_contact_max, dtype=wp.vec3, device=self.device, requires_grad=requires_grad
-        )
-        # world space position of contact point resulting from applying current body 1 transform to its point1
-        self.rigid_active_contact_point1 = wp.zeros(
-            self.rigid_contact_max, dtype=wp.vec3, device=self.device, requires_grad=requires_grad
-        )
-        # current contact distance (negative penetration depth)
-        self.rigid_active_contact_distance = wp.zeros(
-            self.rigid_contact_max, dtype=wp.float32, device=self.device, requires_grad=requires_grad
-        )
-        # contact distance before the solver iterations
-        self.rigid_active_contact_distance_prev = wp.zeros(
-            self.rigid_contact_max, dtype=wp.float32, device=self.device, requires_grad=requires_grad
-        )
-        # world space position of point0 before the solver iterations
-        self.rigid_active_contact_point0_prev = wp.zeros(
-            self.rigid_contact_max, dtype=wp.vec3, device=self.device, requires_grad=requires_grad
-        )
-        # world space position of point1 before the solver iterations
-        self.rigid_active_contact_point1_prev = wp.zeros(
-            self.rigid_contact_max, dtype=wp.vec3, device=self.device, requires_grad=requires_grad
-        )
-        # number of contact constraints per rigid body (used for scaling the constraint contributions, a basic version of mass splitting)
-        self.rigid_contact_inv_weight = wp.zeros(
-            len(self.body_q), dtype=wp.float32, device=self.device, requires_grad=requires_grad
-        )
-        # number of contact constraints before the solver iterations
-        self.rigid_contact_inv_weight_prev = wp.zeros(
-            len(self.body_q), dtype=wp.float32, device=self.device, requires_grad=requires_grad
-        )
+        with wp.ScopedDevice(self.device):
+            # serves as counter of the number of active contact points
+            target.rigid_contact_count = wp.zeros(1, dtype=wp.int32)
+            # contact point ID within the (shape_a, shape_b) contact pair
+            target.rigid_contact_point_id = wp.zeros(self.rigid_contact_max, dtype=wp.int32)
+            # position of contact point in body 0's frame before the integration step
+            target.rigid_contact_point0 = wp.zeros(
+                self.rigid_contact_max_limited, dtype=wp.vec3, requires_grad=requires_grad
+            )
+            # position of contact point in body 1's frame before the integration step
+            target.rigid_contact_point1 = wp.zeros(
+                self.rigid_contact_max_limited, dtype=wp.vec3, requires_grad=requires_grad
+            )
+            # moment arm before the integration step resulting from thickness displacement added to contact point 0 in body 0's frame (used in XPBD contact friction handling)
+            target.rigid_contact_offset0 = wp.zeros(
+                self.rigid_contact_max_limited, dtype=wp.vec3, requires_grad=requires_grad
+            )
+            # moment arm before the integration step resulting from thickness displacement added to contact point 1 in body 1's frame (used in XPBD contact friction handling)
+            target.rigid_contact_offset1 = wp.zeros(
+                self.rigid_contact_max_limited, dtype=wp.vec3, requires_grad=requires_grad
+            )
+            # contact normal in world frame
+            target.rigid_contact_normal = wp.zeros(
+                self.rigid_contact_max_limited, dtype=wp.vec3, requires_grad=requires_grad
+            )
+            # combined thickness of both shapes
+            target.rigid_contact_thickness = wp.zeros(
+                self.rigid_contact_max_limited, dtype=wp.float32, requires_grad=requires_grad
+            )
+            # ID of the first shape in the contact pair
+            target.rigid_contact_shape0 = wp.zeros(self.rigid_contact_max_limited, dtype=wp.int32)
+            # ID of the second shape in the contact pair
+            target.rigid_contact_shape1 = wp.zeros(self.rigid_contact_max_limited, dtype=wp.int32)
+
+            # shape IDs of potential contact pairs found during broadphase
+            target.rigid_contact_broad_shape0 = wp.zeros(self.rigid_contact_max, dtype=wp.int32, device=self.device)
+            target.rigid_contact_broad_shape1 = wp.zeros(self.rigid_contact_max, dtype=wp.int32, device=self.device)
+
+            max_pair_count = self.shape_count * self.shape_count
+            # maximum number of contact points per contact pair
+            target.rigid_contact_point_limit = wp.zeros(max_pair_count, dtype=wp.int32, device=self.device)
+            # currently found contacts per contact pair
+            target.rigid_contact_pairwise_counter = wp.zeros(max_pair_count, dtype=wp.int32, device=self.device)
+            # ID of thread that found the current contact point
+            target.rigid_contact_tids = wp.zeros(self.rigid_contact_max, dtype=wp.int32, device=self.device)
 
     def flatten(self):
-        """Returns a list of Tensors stored by the model
+        import warnings
 
-        This function is intended to be used internal-only but can be used to obtain
-        a set of all tensors owned by the model.
-        """
+        warnings.warn(
+            "Model.flatten() will be removed in a future Warp version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         tensors = []
 
         # build a list of all tensor attributes
         for attr, value in self.__dict__.items():
-            if wp.is_tensor(value):
+            if isinstance(value, wp.array):
                 tensors.append(value)
 
         return tensors
 
     def collide(self, state: State):
-        wp.utils.warn(
+        import warnings
+
+        warnings.warn(
             "Model.collide() is not needed anymore and will be removed in a future Warp version.",
             DeprecationWarning,
             stacklevel=2,
@@ -839,7 +850,9 @@ class Model:
 
     @property
     def soft_contact_distance(self):
-        wp.utils.warn(
+        import warnings
+
+        warnings.warn(
             "Model.soft_contact_distance is deprecated and will be removed in a future Warp version. "
             "Particles now have individual radii, returning `Model.particle_max_radius`.",
             DeprecationWarning,
@@ -849,7 +862,9 @@ class Model:
 
     @soft_contact_distance.setter
     def soft_contact_distance(self, value):
-        wp.utils.warn(
+        import warnings
+
+        warnings.warn(
             "Model.soft_contact_distance is deprecated and will be removed in a future Warp version. "
             "Particles now have individual radii, see `Model.particle_radius`.",
             DeprecationWarning,
@@ -864,10 +879,12 @@ class Model:
     @particle_radius.setter
     def particle_radius(self, value):
         if isinstance(value, float):
-            wp.utils.warn(
+            import warnings
+
+            warnings.warn(
                 "Model.particle_radius is an array of per-particle radii, assigning with a scalar value "
                 "is deprecated and will be removed in a future Warp version.",
-                PendingDeprecationWarning,
+                DeprecationWarning,
                 stacklevel=2,
             )
             self._particle_radius.fill_(value)
@@ -934,10 +951,6 @@ class ModelBuilder:
     default_tri_drag = 0.0
     default_tri_lift = 0.0
 
-    # Default distance constraint properties
-    default_spring_ke = 100.0
-    default_spring_kd = 0.0
-
     # Default edge bending properties
     default_edge_ke = 100.0
     default_edge_kd = 0.0
@@ -966,7 +979,6 @@ class ModelBuilder:
         self.particle_mass = []
         self.particle_radius = []
         self.particle_flags = []
-        self.particle_max_velocity = 1e5
 
         # shapes (each shape has an entry in these arrays)
         # transform from shape to body
@@ -1102,11 +1114,14 @@ class ModelBuilder:
         # Maximum number of soft contacts that can be registered
         self.soft_contact_max = 64 * 1024
 
+        # maximum number of contact points to generate per mesh shape
+        self.rigid_mesh_contact_max = 0  # 0 = unlimited
+
         # contacts to be generated within the given distance margin to be generated at
         # every simulation substep (can be 0 if only one PBD solver iteration is used)
         self.rigid_contact_margin = 0.1
         # torsional friction coefficient (only considered by XPBD so far)
-        self.rigid_contact_torsional_friction = 0.5
+        self.rigid_contact_torsional_friction = 0.0
         # rolling friction coefficient (only considered by XPBD so far)
         self.rigid_contact_rolling_friction = 0.001
 
@@ -1203,10 +1218,10 @@ class ModelBuilder:
                 for i in range(len(joint_X_p)):
                     if articulation.joint_type[i] == wp.sim.JOINT_FREE:
                         qi = articulation.joint_q_start[i]
-                        xform_prev = wp.transform(joint_q[qi : qi + 3], joint_q[qi + 3 : qi + 7])
+                        xform_prev = wp.transform(joint_q[qi: qi + 3], joint_q[qi + 3: qi + 7])
                         tf = xform * xform_prev
-                        joint_q[qi : qi + 3] = tf.p
-                        joint_q[qi + 3 : qi + 7] = tf.q
+                        joint_q[qi: qi + 3] = tf.p
+                        joint_q[qi + 3: qi + 7] = tf.q
                     elif articulation.joint_parent[i] == -1:
                         joint_X_p[i] = xform * joint_X_p[i]
             self.joint_X_p.extend(joint_X_p)
@@ -1941,6 +1956,38 @@ class ModelBuilder:
             enabled=enabled,
         )
 
+    def plot_articulation(self):
+        """Plots the model's articulation."""
+
+        def joint_type_str(type):
+            if type == JOINT_FREE:
+                return "free"
+            elif type == JOINT_BALL:
+                return "ball"
+            elif type == JOINT_PRISMATIC:
+                return "prismatic"
+            elif type == JOINT_REVOLUTE:
+                return "revolute"
+            elif type == JOINT_D6:
+                return "D6"
+            elif type == JOINT_UNIVERSAL:
+                return "universal"
+            elif type == JOINT_COMPOUND:
+                return "compound"
+            elif type == JOINT_FIXED:
+                return "fixed"
+            return "unknown"
+
+        vertices = ["world"] + self.body_name + [f"shape_{i}" for i in range(self.shape_count)]
+        edges = []
+        edge_labels = []
+        for i in range(self.joint_count):
+            edges.append((self.joint_child[i] + 1, self.joint_parent[i] + 1))
+            edge_labels.append(f"{self.joint_name[i]}\n({joint_type_str(self.joint_type[i])})")
+        for i in range(self.shape_count):
+            edges.append((len(self.body_name) + i + 1, self.shape_body[i] + 1))
+        wp.sim.plot_graph(vertices, edges, edge_labels=edge_labels)
+
     def collapse_fixed_joints(self, verbose=wp.config.verbose):
         """Removes fixed joints from the model and merges the bodies they connect."""
 
@@ -1983,9 +2030,9 @@ class ModelBuilder:
             data = {
                 "type": self.joint_type[i],
                 # 'armature': self.joint_armature[i],
-                "q": self.joint_q[q_start : q_start + q_dim],
-                "qd": self.joint_qd[qd_start : qd_start + qd_dim],
-                "act": self.joint_act[qd_start : qd_start + qd_dim],
+                "q": self.joint_q[q_start: q_start + q_dim],
+                "qd": self.joint_qd[qd_start: qd_start + qd_dim],
+                "act": self.joint_act[qd_start: qd_start + qd_dim],
                 "q_start": q_start,
                 "qd_start": qd_start,
                 "linear_compliance": self.joint_linear_compliance[i],
@@ -2045,7 +2092,7 @@ class ModelBuilder:
                 if verbose:
                     print(
                         f'Remove fixed joint {joint["name"]} between {parent_name} and {child_name}, '
-                        f"merging {child_name} into {last_dynamic_body_name}"
+                        f'merging {child_name} into {last_dynamic_body_name}'
                     )
                 child_id = body_data[child_body]["original_id"]
                 for shape in self.body_shapes[child_id]:
@@ -2646,58 +2693,6 @@ class ModelBuilder:
             has_ground_collision=has_ground_collision,
         )
 
-    def add_shape_sdf(
-        self,
-        body: int,
-        pos: Vec3 = (0.0, 0.0, 0.0),
-        rot: Quat = (0.0, 0.0, 0.0, 1.0),
-        sdf: SDF = None,
-        scale: Vec3 = (1.0, 1.0, 1.0),
-        density: float = default_shape_density,
-        ke: float = default_shape_ke,
-        kd: float = default_shape_kd,
-        kf: float = default_shape_kf,
-        mu: float = default_shape_mu,
-        restitution: float = default_shape_restitution,
-        is_solid: bool = True,
-        thickness: float = default_geo_thickness,
-    ):
-        """Adds SDF collision shape to a body.
-
-        Args:
-            body: The index of the parent body this shape belongs to
-            pos: The location of the shape with respect to the parent frame
-            rot: The rotation of the shape with respect to the parent frame
-            sdf: The sdf object
-            scale: Scale to use for the collider
-            density: The density of the shape
-            ke: The contact elastic stiffness
-            kd: The contact damping stiffness
-            kf: The contact friction stiffness
-            mu: The coefficient of friction
-            restitution: The coefficient of restitution
-            is_solid: If True, the mesh is solid, otherwise it is a hollow surface with the given wall thickness
-            thickness: Thickness to use for computing inertia of a hollow mesh, and for collision handling
-            has_ground_collision: If True, the mesh will collide with the ground plane if `Model.ground` is True
-
-        """
-        return self._add_shape(
-            body,
-            pos,
-            rot,
-            GEO_SDF,
-            (scale[0], scale[1], scale[2], 0.0),
-            sdf,
-            density,
-            ke,
-            kd,
-            kf,
-            mu,
-            restitution,
-            thickness,
-            is_solid,
-        )
-
     def _shape_radius(self, type, scale, src):
         """
         Calculates the radius of a sphere that encloses the shape, used for broadphase collision detection.
@@ -3183,9 +3178,6 @@ class ModelBuilder:
         tri_lift: float = default_tri_lift,
         edge_ke: float = default_edge_ke,
         edge_kd: float = default_edge_kd,
-        add_springs: bool = False,
-        spring_ke: float = default_spring_ke,
-        spring_kd: float = default_spring_kd,
     ):
         """Helper to create a regular planar cloth grid
 
@@ -3272,8 +3264,6 @@ class ModelBuilder:
         # is a good test of the adjacency structure
         adj = wp.utils.MeshAdjacency(self.tri_indices[start_tri:end_tri], end_tri - start_tri)
 
-        spring_indices = set()
-
         for k, e in adj.edges.items():
             # skip open edges
             if e.f0 == -1 or e.f1 == -1:
@@ -3282,19 +3272,6 @@ class ModelBuilder:
             self.add_edge(
                 e.o0, e.o1, e.v0, e.v1, edge_ke=edge_ke, edge_kd=edge_kd
             )  # opposite 0, opposite 1, vertex 0, vertex 1
-
-            spring_indices.add((min(e.o0, e.o1), max(e.o0, e.o1)))
-            spring_indices.add((min(e.o0, e.v0), max(e.o0, e.v0)))
-            spring_indices.add((min(e.o0, e.v1), max(e.o0, e.v1)))
-
-            spring_indices.add((min(e.o1, e.v0), max(e.o1, e.v0)))
-            spring_indices.add((min(e.o1, e.v1), max(e.o1, e.v1)))
-
-            spring_indices.add((min(e.v0, e.v1), max(e.v0, e.v1)))
-
-        if add_springs:
-            for i, j in spring_indices:
-                self.add_spring(i, j, spring_ke, spring_kd, control=0.0)
 
     def add_cloth_mesh(
         self,
@@ -3314,9 +3291,6 @@ class ModelBuilder:
         tri_lift: float = default_tri_lift,
         edge_ke: float = default_edge_ke,
         edge_kd: float = default_edge_kd,
-        add_springs: bool = False,
-        spring_ke: float = default_spring_ke,
-        spring_kd: float = default_spring_kd,
     ):
         """Helper to create a cloth model from a regular triangle mesh
 
@@ -3373,10 +3347,7 @@ class ModelBuilder:
 
         adj = wp.utils.MeshAdjacency(self.tri_indices[start_tri:end_tri], end_tri - start_tri)
 
-        edgeinds = np.fromiter(
-            (x for e in adj.edges.values() if e.f0 != -1 and e.f1 != -1 for x in (e.o0, e.o1, e.v0, e.v1)),
-            int,
-        ).reshape(-1, 4)
+        edgeinds = np.array([[e.o0, e.o1, e.v0, e.v1] for k, e in adj.edges.items()])
         self.add_edges(
             edgeinds[:, 0],
             edgeinds[:, 1],
@@ -3385,21 +3356,6 @@ class ModelBuilder:
             edge_ke=[edge_ke] * len(edgeinds),
             edge_kd=[edge_kd] * len(edgeinds),
         )
-
-        if add_springs:
-            spring_indices = set()
-            for i, j, k, l in edgeinds:
-                spring_indices.add((min(i, j), max(i, j)))
-                spring_indices.add((min(i, k), max(i, k)))
-                spring_indices.add((min(i, l), max(i, l)))
-
-                spring_indices.add((min(j, k), max(j, k)))
-                spring_indices.add((min(j, l), max(j, l)))
-
-                spring_indices.add((min(k, l), max(k, l)))
-
-            for i, j in spring_indices:
-                self.add_spring(i, j, spring_ke, spring_kd, control=0.0)
 
     def add_particle_grid(
         self,
@@ -3704,7 +3660,7 @@ class ModelBuilder:
         for i in range(self.shape_count - 1):
             self.shape_collision_filter_pairs.add((i, ground_id))
 
-    def finalize(self, device=None, requires_grad=False) -> Model:
+    def finalize(self, device=None, requires_grad=False, integrator=None) -> Model:
         """Convert this builder object to a concrete model for simulation.
 
         After building simulation elements this method should be called to transfer
@@ -3739,7 +3695,7 @@ class ModelBuilder:
             # -------------------------------------
             # construct Model (non-time varying) data
 
-            m = Model(device)
+            m = Model(device, integrator=integrator)
             m.requires_grad = requires_grad
 
             m.num_envs = self.num_envs
@@ -3755,7 +3711,6 @@ class ModelBuilder:
             m._particle_radius = wp.array(self.particle_radius, dtype=wp.float32, requires_grad=requires_grad)
             m.particle_flags = wp.array([flag_to_int(f) for f in self.particle_flags], dtype=wp.uint32)
             m.particle_max_radius = np.max(self.particle_radius) if len(self.particle_radius) > 0 else 0.0
-            m.particle_max_velocity = self.particle_max_velocity
 
             # hash-grid for particle interactions
             m.particle_grid = wp.HashGrid(128, 128, 128)
@@ -3811,9 +3766,6 @@ class ModelBuilder:
             m.spring_stiffness = wp.array(self.spring_stiffness, dtype=wp.float32, requires_grad=requires_grad)
             m.spring_damping = wp.array(self.spring_damping, dtype=wp.float32, requires_grad=requires_grad)
             m.spring_control = wp.array(self.spring_control, dtype=wp.float32, requires_grad=requires_grad)
-            m.spring_constraint_lambdas = wp.array(
-                shape=len(self.spring_rest_length), dtype=wp.float32, requires_grad=requires_grad
-            )
 
             # ---------------------
             # triangles
@@ -3830,9 +3782,6 @@ class ModelBuilder:
             m.edge_rest_angle = wp.array(self.edge_rest_angle, dtype=wp.float32, requires_grad=requires_grad)
             m.edge_bending_properties = wp.array(
                 self.edge_bending_properties, dtype=wp.float32, requires_grad=requires_grad
-            )
-            m.edge_constraint_lambdas = wp.array(
-                shape=len(self.edge_rest_angle), dtype=wp.float32, requires_grad=requires_grad
             )
 
             # ---------------------
@@ -3932,12 +3881,17 @@ class ModelBuilder:
                 m.allocate_soft_contacts(self.soft_contact_max, requires_grad=requires_grad)
             m.find_shape_contact_pairs()
             if self.num_rigid_contacts_per_env is None:
-                contact_count = m.count_contact_points()
+                contact_count, limited_contact_count = m.count_contact_points()
             else:
-                contact_count = self.num_rigid_contacts_per_env * self.num_envs
-            if wp.config.verbose:
-                print(f"Allocating {contact_count} rigid contacts.")
-            m.allocate_rigid_contacts(contact_count, requires_grad=requires_grad)
+                contact_count = limited_contact_count = self.num_rigid_contacts_per_env * self.num_envs
+            if contact_count:
+                if wp.config.verbose:
+                    print(f"Allocating {contact_count} rigid contacts.")
+                m._allocate_rigid_contacts(
+                    count=contact_count,
+                    limited_contact_count=limited_contact_count,
+                    requires_grad=requires_grad)
+            m.rigid_mesh_contact_max = self.rigid_mesh_contact_max
             m.rigid_contact_margin = self.rigid_contact_margin
             m.rigid_contact_torsional_friction = self.rigid_contact_torsional_friction
             m.rigid_contact_rolling_friction = self.rigid_contact_rolling_friction

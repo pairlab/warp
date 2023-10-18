@@ -24,6 +24,16 @@ Pre-built binary packages for Windows and Linux are also available on the [Relea
 
     pip install .
 
+This is the PAIR lab's custom fork of Warp, which is compatible with our set of custom utils and scripts. These tools can be found in [this repository](https://github.com/pairlab/pair-warp).
+
+To use PAIR's custom Warp tools, clone the repository into the root directory of this repository:
+
+    git clone https://github.com/pairlab/pair-warp.git
+
+To run an example script, run the following command from the root directory of this repository (run_task.py, for example):
+
+    python -m pair-warp.scripts.run_task
+
 ## Getting Started
 
 An example first program that computes the lengths of random 3D vectors is given below:

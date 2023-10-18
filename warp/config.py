@@ -5,7 +5,9 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-version = "1.0.0-beta.2"
+import os
+
+version = "0.10.1"
 
 cuda_path = (
     None  # path to local CUDA toolchain, if None at init time warp will attempt to find the SDK using CUDA_PATH env var

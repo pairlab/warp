@@ -39,6 +39,9 @@ class HumanoidEnvironment(Environment):
         rigid_contact_con_weighting=True,
     )
 
+    use_tiled_rendering = False
+    show_joints = False
+
     def create_articulation(self, builder):
         wp.sim.parse_mjcf(
             os.path.join(os.path.dirname(__file__), "../assets/nv_humanoid.xml"),

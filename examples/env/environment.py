@@ -35,7 +35,7 @@ class IntegratorType(Enum):
         return self.value
 
 
-def compute_env_offsets(num_envs, env_offset=(5.0, 0.0, 5.0), up_axis="Y"):
+def compute_env_offsets(num_envs, env_offset=(5.0, 0.0, 5.0), up_axis="y"):
     # compute positional offsets per environment
     env_offset = np.array(env_offset)
     nonzeros = np.nonzero(env_offset)[0]
@@ -70,7 +70,7 @@ def compute_env_offsets(num_envs, env_offset=(5.0, 0.0, 5.0), up_axis="Y"):
     min_offsets = np.min(env_offsets, axis=0)
     correction = min_offsets + (np.max(env_offsets, axis=0) - min_offsets) / 2.0
     if isinstance(up_axis, str):
-        up_axis = "XYZ".index(up_axis.upper())
+        up_axis = "xyz".index(up_axis.lower())
     correction[up_axis] = 0.0  # ensure the envs are not shifted below the ground plane
     env_offsets -= correction
     return env_offsets
@@ -114,13 +114,16 @@ class Environment:
 
     integrator_type: IntegratorType = IntegratorType.XPBD
 
-    up_axis: str = "Y"
+    up_axis: str = "y"
     gravity: float = -9.81
     env_offset: Tuple[float, float, float] = (1.0, 0.0, 1.0)
 
     # stiffness and damping for joint attachment dynamics used by Euler
     joint_attach_ke: float = 32000.0
     joint_attach_kd: float = 50.0
+
+    # maximum number of rigid contact points to generate per mesh
+    rigid_mesh_contact_max: int = 0  # (0 = unlimited)
 
     # distance threshold at which contacts are generated
     rigid_contact_margin: float = 0.05
@@ -168,8 +171,10 @@ class Environment:
     def init(self):
         if self.integrator_type == IntegratorType.EULER:
             self.sim_substeps = self.sim_substeps_euler
+            self.integrator = wp.sim.SemiImplicitIntegrator(**self.euler_settings)
         elif self.integrator_type == IntegratorType.XPBD:
             self.sim_substeps = self.sim_substeps_xpbd
+            self.integrator = wp.sim.XPBDIntegrator(**self.xpbd_settings)
 
         self.episode_frames = int(self.episode_duration / self.frame_dt)
         self.sim_dt = self.frame_dt / self.sim_substeps
@@ -180,6 +185,7 @@ class Environment:
             self.env_offset = (0.0, 0.0, 0.0)
 
         builder = wp.sim.ModelBuilder()
+        builder.rigid_mesh_contact_max = self.rigid_mesh_contact_max
         builder.rigid_contact_margin = self.rigid_contact_margin
         try:
             articulation_builder = wp.sim.ModelBuilder()
@@ -196,7 +202,7 @@ class Environment:
             self.setup(builder)
             self.bodies_per_env = len(builder.body_q)
 
-        self.model = builder.finalize()
+        self.model = builder.finalize(integrator=self.integrator)
         self.device = self.model.device
         if not self.device.is_cuda:
             self.use_graph_capture = False
@@ -208,11 +214,6 @@ class Environment:
         # set up current and next state to be used by the integrator
         self.state_0 = None
         self.state_1 = None
-
-        if self.integrator_type == IntegratorType.EULER:
-            self.integrator = wp.sim.SemiImplicitIntegrator(**self.euler_settings)
-        elif self.integrator_type == IntegratorType.XPBD:
-            self.integrator = wp.sim.XPBDIntegrator(**self.xpbd_settings)
 
         self.renderer = None
         if self.profile:

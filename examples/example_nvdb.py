@@ -62,13 +62,10 @@ def simulate(
     xpred = x + v * dt
     xpred_local = wp.volume_world_to_index(volume, xpred)
 
-    #d = wp.volume_sample_f(volume, xpred_local, wp.Volume.LINEAR)
-    n = wp.vec3()
-    d = wp.volume_sample_grad_f(volume, xpred_local, wp.Volume.LINEAR, n)
+    d = wp.volume_sample_f(volume, xpred_local, wp.Volume.LINEAR)
 
     if d < margin:
-        #n = volume_grad(volume, xpred)
-        n = wp.normalize(n)
+        n = volume_grad(volume, xpred)
         err = d - margin
 
         # mesh collision

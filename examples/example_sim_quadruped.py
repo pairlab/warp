@@ -130,7 +130,6 @@ class Example:
                 if self.enable_rendering:
                     with wp.ScopedTimer("render", active=True):
                         self.render()
-                    self.renderer.save()
 
             wp.synchronize()
 
@@ -138,6 +137,8 @@ class Example:
         avg_steps_second = 1000.0 * float(self.num_envs) / avg_time
 
         print(f"envs: {self.num_envs} steps/second {avg_steps_second} avg_time {avg_time}")
+        
+        self.renderer.save()
 
         return 1000.0 * float(self.num_envs) / avg_time
 

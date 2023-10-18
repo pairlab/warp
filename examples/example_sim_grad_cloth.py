@@ -48,7 +48,6 @@ class Cloth:
 
     def __init__(self, render=True, profile=False, adapter=None):
         builder = wp.sim.ModelBuilder()
-        builder.default_particle_radius = 0.01
 
         dim_x = 16
         dim_y = 16
@@ -74,7 +73,9 @@ class Cloth:
 
         self.model = builder.finalize(self.device)
         self.model.ground = False
-
+        # soft contact distance determines the size of the rendered particles
+        self.model.soft_contact_distance = 0.01
+        
         self.integrator = wp.sim.SemiImplicitIntegrator()
 
         self.target = (8.0, 0.0, 0.0)
@@ -86,10 +87,11 @@ class Cloth:
         for i in range(self.sim_steps + 1):
             self.states.append(self.model.state(requires_grad=True))
 
-        if self.render:
+        if (self.render):
             self.stage = wp.sim.render.SimRendererOpenGL(
-                self.model, os.path.join(os.path.dirname(__file__), "outputs/example_sim_grad_cloth.usd"), scaling=4.0
-            )
+                self.model,
+                os.path.join(os.path.dirname(__file__), "outputs/example_sim_grad_cloth.usd"),
+                scaling=4.0)
 
     @wp.kernel
     def com_kernel(positions: wp.array(dtype=wp.vec3), n: int, com: wp.array(dtype=wp.vec3)):
@@ -155,7 +157,8 @@ class Cloth:
 
             self.render_time += self.frame_dt
 
-    def train(self, mode="gd"):
+    def train(self, mode='gd'):
+
         tape = wp.Tape()
 
         for i in range(self.train_iters):
@@ -205,7 +208,7 @@ class Cloth:
                 wp.launch(self.step_kernel, dim=len(x), inputs=[x, x.grad, self.train_rate], device=self.device)
 
             tape.zero()
-
+        
         self.stage.save()
 
 

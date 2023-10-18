@@ -7,18 +7,23 @@
 
 from __future__ import annotations
 
-import ast
-import builtins
-import ctypes
-import inspect
 import re
 import sys
+import ast
+import inspect
+import ctypes
 import textwrap
 import types
-from typing import Any, Callable, Mapping
 
-import warp.config
+import numpy as np
+
+from typing import Any
+from typing import Callable
+from typing import Mapping
+from typing import Union
+
 from warp.types import *
+import warp.config
 
 # map operator to function name
 builtin_operators = {}
@@ -440,16 +445,14 @@ class Adjoint:
         adj,
         func,
         overload_annotations=None,
-        is_user_function=False,
         skip_forward_codegen=False,
         skip_reverse_codegen=False,
         custom_reverse_mode=False,
         custom_reverse_num_input_args=-1,
-        transformers: List[ast.NodeTransformer] = [],
+        forced_func_name=None,
+        transformers: List[ast.NodeTransformer]=[],
     ):
         adj.func = func
-
-        adj.is_user_function = is_user_function
 
         # whether the generation of the forward code is skipped for this function
         adj.skip_forward_codegen = skip_forward_codegen
@@ -478,6 +481,9 @@ class Adjoint:
             adj.tree = transformer.visit(adj.tree)
 
         adj.fun_name = adj.tree.body[0].name
+
+        # function name to be used for the generated code (if defined)
+        adj.forced_func_name = forced_func_name
 
         # whether the forward code shall be used for the reverse pass and a custom
         # function signature is applied to the reverse version of the function
@@ -591,9 +597,7 @@ class Adjoint:
         return arg_str
 
     # generates argument string for a reverse function call
-    def format_reverse_call_args(
-        adj, args, args_out, non_adjoint_args, non_adjoint_outputs, use_initializer_list, has_output_args=True
-    ):
+    def format_reverse_call_args(adj, args, args_out, non_adjoint_args, non_adjoint_outputs, use_initializer_list, has_output_args=True):
         formatted_var = adj.format_args("var", args)
         formatted_out = []
         if has_output_args and len(args_out) > 1:
@@ -621,10 +625,10 @@ class Adjoint:
         return arg_str
 
     def indent(adj):
-        adj.prefix = adj.prefix + "    "
+        adj.prefix = adj.prefix + "\t"
 
     def dedent(adj):
-        adj.prefix = adj.prefix[:-4]
+        adj.prefix = adj.prefix[0:-1]
 
     def begin_block(adj):
         b = Block()
@@ -674,7 +678,7 @@ class Adjoint:
         return output
 
     def add_comp(adj, op_strings, left, comps):
-        output = adj.add_var(builtins.bool)
+        output = adj.add_var(bool)
 
         s = "var_" + str(output) + " = " + ("(" * len(comps)) + "var_" + str(left) + " "
         for op, comp in zip(op_strings, comps):
@@ -687,7 +691,7 @@ class Adjoint:
         return output
 
     def add_bool_op(adj, op_string, exprs):
-        output = adj.add_var(builtins.bool)
+        output = adj.add_var(bool)
         command = (
             "var_" + str(output) + " = " + (" " + op_string + " ").join(["var_" + str(expr) for expr in exprs]) + ";"
         )
@@ -844,7 +848,7 @@ class Adjoint:
                 )
 
             if func.skip_replay:
-                adj.add_forward(forward_call, replay="// " + replay_call)
+                adj.add_forward(forward_call, replay="//" + replay_call)
             else:
                 adj.add_forward(forward_call, replay=replay_call)
 
@@ -866,9 +870,7 @@ class Adjoint:
             adj.add_forward(forward_call)
 
             if not func.missing_grad and len(args):
-                arg_str = adj.format_reverse_call_args(
-                    args, output, {}, {}, use_initializer_list, has_output_args=func.custom_grad_func is None
-                )
+                arg_str = adj.format_reverse_call_args(args, output, {}, {}, use_initializer_list, has_output_args=func.custom_grad_func is None)
                 if arg_str is not None:
                     reverse_call = "{}adj_{}({});".format(func.namespace, func.native_func, arg_str)
                     adj.add_reverse(reverse_call)
@@ -1195,9 +1197,9 @@ class Adjoint:
             return out
 
     def emit_NameConstant(adj, node):
-        if node.value is True:
+        if node.value == True:
             return adj.add_constant(True)
-        elif node.value is False:
+        elif node.value == False:
             return adj.add_constant(False)
         elif node.value is None:
             raise TypeError("None type unsupported")
@@ -1322,7 +1324,7 @@ class Adjoint:
 
     # returns a constant range() if unrollable, otherwise None
     def get_unroll_range(adj, loop):
-        if not isinstance(loop.iter, ast.Call) or not isinstance(loop.iter.func, ast.Name) or loop.iter.func.id != "range":
+        if not isinstance(loop.iter, ast.Call) or loop.iter.func.id != "range":
             return None
 
         for a in loop.iter.args:
@@ -1421,7 +1423,7 @@ class Adjoint:
         func, path = adj.resolve_path(node.func)
         templates = []
 
-        if isinstance(func, warp.context.Function) is False:
+        if isinstance(func, warp.context.Function) == False:
             if len(path) == 0:
                 raise RuntimeError(f"Unrecognized syntax for function call, path not valid: '{node.func}'")
 
@@ -1488,7 +1490,7 @@ class Adjoint:
     def emit_Subscript(adj, node):
         if hasattr(node.value, "attr") and node.value.attr == "adjoint":
             # handle adjoint of a variable, i.e. wp.adjoint[var]
-            var = adj.eval(node.slice)
+            var = adj.eval(node.slice.value)
             var_name = var.label
             var = Var(f"adj_{var_name}", type=var.type, constant=None, prefix=False, is_adjoint=True)
             adj.symbols[var.label] = var
@@ -1577,7 +1579,7 @@ class Adjoint:
         elif isinstance(node.targets[0], ast.Subscript):
             if hasattr(node.targets[0].value, "attr") and node.targets[0].value.attr == "adjoint":
                 # handle adjoint of a variable, i.e. wp.adjoint[var]
-                src_var = adj.eval(node.targets[0].slice)
+                src_var = adj.eval(node.targets[0].slice.value)
                 var = Var(f"adj_{src_var.label}", type=src_var.type, constant=None, prefix=False)
                 adj.symbols[var.label] = var
                 value = adj.eval(node.value)
@@ -1750,19 +1752,6 @@ class Adjoint:
         emit_node = node_visitors.get(type(node))
 
         if emit_node is not None:
-            if adj.is_user_function:
-                if hasattr(node, "value") and hasattr(node.value, "func") and hasattr(node.value.func, "attr"):
-                    if node.value.func.attr == "tid":
-                        lineno = adj.lineno + adj.fun_lineno
-                        line = adj.source.splitlines()[adj.lineno]
-
-                        warp.utils.warn(
-                            "Calling wp.tid() from a @wp.func is deprecated and will be removed in a future Warp "
-                            "version. Instead, obtain the indices from a @wp.kernel and pass them as "
-                            f"arguments to this function {adj.fun_name}, {adj.filename}:{lineno}:\n{line}\n",
-                            PendingDeprecationWarning,
-                            stacklevel=2,
-                        )
             return emit_node(adj, node)
         else:
             raise Exception("Error, ast node of type {} not supported".format(type(node)))
@@ -1805,7 +1794,7 @@ class Adjoint:
             vars_dict = {**adj.func.__globals__, **capturedvars}
             func = eval(".".join(path), vars_dict)
             return func, path
-        except Exception:
+        except:
             pass
 
         # I added this so people can eg do this kind of thing
@@ -1825,14 +1814,14 @@ class Adjoint:
             evalstr = ".".join(["warp"] + path)
             func = eval(evalstr, {"warp": warp})
             return func, path
-        except Exception:
+        except:
             return None, path
 
     # annotate generated code with the original source code line
     def set_lineno(adj, lineno):
         if adj.lineno is None or adj.lineno != lineno:
             line = lineno + adj.fun_lineno
-            source = adj.raw_source[lineno].strip().ljust(80 - len(adj.prefix), " ")
+            source = adj.raw_source[lineno].strip().ljust(80)
             adj.add_forward(f"// {source}       <L {line}>")
             adj.add_reverse(f"// adj: {source}  <L {line}>")
         adj.lineno = lineno
@@ -1894,7 +1883,7 @@ static CUDA_CALLABLE void adj_{name}({reverse_args})
 {{
 {reverse_body}}}
 
-CUDA_CALLABLE void adj_atomic_add({name}* p, {name} t)
+CUDA_CALLABLE void atomic_add({name}* p, {name} t)
 {{
 {atomic_add_body}}}
 
@@ -2049,7 +2038,7 @@ WP_API void {name}_cpu_backward(
 def constant_str(value):
     value_type = type(value)
 
-    if value_type == bool or value_type == builtins.bool:
+    if value_type == bool:
         if value:
             return "true"
         else:
@@ -2091,7 +2080,7 @@ def constant_str(value):
 def indent(args, stops=1):
     sep = ",\n"
     for i in range(stops):
-        sep += "    "
+        sep += "\t"
 
     # return sep + args.replace(", ", "," + sep)
     return sep.join(args)
@@ -2124,7 +2113,7 @@ def codegen_struct(struct, device="cpu", indent_size=4):
         forward_args.append(f"{var.ctype()} const& {label} = {{}}")
         reverse_args.append(f"{var.ctype()} const&")
 
-        atomic_add_body.append(f"{indent_block}adj_atomic_add(&p->{label}, t.{label});\n")
+        atomic_add_body.append(f"{indent_block}atomic_add(&p->{label}, t.{label});\n")
 
         prefix = f"{indent_block}," if forward_initializers else ":"
         forward_initializers.append(f"{indent_block}{prefix} {label}{{{label}}}\n")
@@ -2133,9 +2122,9 @@ def codegen_struct(struct, device="cpu", indent_size=4):
     for label, var in struct.vars.items():
         reverse_args.append(var.ctype() + " & adj_" + label)
         if is_array(var.type):
-            reverse_body.append(f"{indent_block}adj_{label} = adj_ret.{label};\n")
+            reverse_body.append(f"adj_{label} = {indent_block}adj_ret.{label};\n")
         else:
-            reverse_body.append(f"{indent_block}adj_{label} += adj_ret.{label};\n")
+            reverse_body.append(f"adj_{label} += {indent_block}adj_ret.{label};\n")
 
     reverse_args.append(name + " & adj_ret")
 
@@ -2248,7 +2237,7 @@ def codegen_func_reverse(adj, func_type="kernel", device="cpu"):
     return s
 
 
-def codegen_func(adj, c_func_name: str, device="cpu", options={}):
+def codegen_func(adj, name, device="cpu", options={}):
     # forward header
     if adj.return_var is not None and len(adj.return_var) == 1:
         return_type = adj.return_var[0].ctype()
@@ -2288,7 +2277,7 @@ def codegen_func(adj, c_func_name: str, device="cpu", options={}):
         reverse_args.append(return_type + " & adj_ret")
     # custom output reverse args (user-declared)
     if adj.custom_reverse_mode:
-        for arg in adj.args[adj.custom_reverse_num_input_args :]:
+        for arg in adj.args[adj.custom_reverse_num_input_args:]:
             reverse_args.append(f"{arg.ctype()} & {arg.emit()}")
 
     if device == "cpu":
@@ -2302,6 +2291,8 @@ def codegen_func(adj, c_func_name: str, device="cpu", options={}):
 
     # codegen body
     forward_body = codegen_func_forward(adj, func_type="function", device=device)
+
+    c_func_name = make_full_qualified_name(adj.forced_func_name or adj.func.__qualname__)
 
     s = ""
     if not adj.skip_forward_codegen:
@@ -2318,10 +2309,7 @@ def codegen_func(adj, c_func_name: str, device="cpu", options={}):
         if adj.custom_reverse_mode:
             reverse_body = "\t// user-defined adjoint code\n" + forward_body
         else:
-            if options.get("enable_backward", True):
-                reverse_body = codegen_func_reverse(adj, func_type="function", device=device)
-            else:
-                reverse_body = '\t// reverse mode disabled (module option "enable_backward" is False)\n'
+            reverse_body = codegen_func_reverse(adj, func_type="function", device=device)
         s += reverse_template.format(
             name=c_func_name,
             return_type=return_type,

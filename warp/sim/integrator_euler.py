@@ -12,10 +12,11 @@ models + state forward in time.
 
 import warp as wp
 
-from .collide import triangle_closest_point_barycentric
-from .model import PARTICLE_FLAG_ACTIVE, ModelShapeGeometry, ModelShapeMaterials
+from .model import PARTICLE_FLAG_ACTIVE, ModelShapeMaterials, ModelShapeGeometry
+
 from .optimizer import Optimizer
 from .particles import eval_particle_forces
+from .collide import triangle_closest_point_barycentric
 from .utils import quat_decompose, quat_twist
 
 
@@ -28,7 +29,6 @@ def integrate_particles(
     particle_flags: wp.array(dtype=wp.uint32),
     gravity: wp.vec3,
     dt: float,
-    v_max: float,
     x_new: wp.array(dtype=wp.vec3),
     v_new: wp.array(dtype=wp.vec3),
 ):
@@ -44,10 +44,6 @@ def integrate_particles(
 
     # simple semi-implicit Euler. v1 = v0 + a dt, x1 = x0 + v1 dt
     v1 = v0 + (f0 * inv_mass + gravity * wp.step(0.0 - inv_mass)) * dt
-    # enforce velocity limit to prevent instability
-    v1_mag = wp.length(v1)
-    if v1_mag > v_max:
-        v1 *= v_max / v1_mag
     x1 = x0 + v1 * dt
 
     x_new[tid] = x1
@@ -841,10 +837,10 @@ def eval_particle_ground_contacts(
 def eval_particle_contacts(
     particle_x: wp.array(dtype=wp.vec3),
     particle_v: wp.array(dtype=wp.vec3),
-    body_q: wp.array(dtype=wp.transform),
-    body_qd: wp.array(dtype=wp.spatial_vector),
     particle_radius: wp.array(dtype=float),
     particle_flags: wp.array(dtype=wp.uint32),
+    body_q: wp.array(dtype=wp.transform),
+    body_qd: wp.array(dtype=wp.spatial_vector),
     body_com: wp.array(dtype=wp.vec3),
     shape_body: wp.array(dtype=int),
     shape_materials: ModelShapeMaterials,
@@ -954,9 +950,8 @@ def eval_rigid_contacts(
     body_com: wp.array(dtype=wp.vec3),
     shape_materials: ModelShapeMaterials,
     geo: ModelShapeGeometry,
+    shape_body: wp.array(dtype=int),
     contact_count: wp.array(dtype=int),
-    contact_body0: wp.array(dtype=int),
-    contact_body1: wp.array(dtype=int),
     contact_point0: wp.array(dtype=wp.vec3),
     contact_point1: wp.array(dtype=wp.vec3),
     contact_normal: wp.array(dtype=wp.vec3),
@@ -966,8 +961,6 @@ def eval_rigid_contacts(
     body_f: wp.array(dtype=wp.spatial_vector),
 ):
     tid = wp.tid()
-    if contact_shape0[tid] == contact_shape1[tid]:
-        return
 
     count = contact_count[0]
     if tid >= count:
@@ -983,6 +976,10 @@ def eval_rigid_contacts(
     thickness_b = 0.0
     shape_a = contact_shape0[tid]
     shape_b = contact_shape1[tid]
+    if shape_a == shape_b:
+        return
+    body_a = -1
+    body_b = -1
     if shape_a >= 0:
         mat_nonzero += 1
         ke += shape_materials.ke[shape_a]
@@ -990,6 +987,7 @@ def eval_rigid_contacts(
         kf += shape_materials.kf[shape_a]
         mu += shape_materials.mu[shape_a]
         thickness_a = geo.thickness[shape_a]
+        body_a = shape_body[shape_a]
     if shape_b >= 0:
         mat_nonzero += 1
         ke += shape_materials.ke[shape_b]
@@ -997,14 +995,12 @@ def eval_rigid_contacts(
         kf += shape_materials.kf[shape_b]
         mu += shape_materials.mu[shape_b]
         thickness_b = geo.thickness[shape_b]
+        body_b = shape_body[shape_b]
     if mat_nonzero > 0:
         ke = ke / float(mat_nonzero)
         kd = kd / float(mat_nonzero)
         kf = kf / float(mat_nonzero)
         mu = mu / float(mat_nonzero)
-
-    body_a = contact_body0[tid]
-    body_b = contact_body1[tid]
 
     # body position in world space
     n = contact_normal[tid]
@@ -1604,6 +1600,10 @@ def compute_forces(model, state, particle_f, body_f, requires_grad):
     if model.rigid_contact_max and (
         model.ground and model.shape_ground_contact_pair_count or model.shape_contact_pair_count
     ):
+        if state.has_rigid_contact_vars:
+            contact_state = state
+        else:
+            contact_state = model
         wp.launch(
             kernel=eval_rigid_contacts,
             dim=model.rigid_contact_max,
@@ -1613,14 +1613,13 @@ def compute_forces(model, state, particle_f, body_f, requires_grad):
                 model.body_com,
                 model.shape_materials,
                 model.shape_geo,
-                model.rigid_contact_count,
-                model.rigid_contact_body0,
-                model.rigid_contact_body1,
-                model.rigid_contact_point0,
-                model.rigid_contact_point1,
-                model.rigid_contact_normal,
-                model.rigid_contact_shape0,
-                model.rigid_contact_shape1,
+                model.shape_body,
+                contact_state.rigid_contact_count,
+                contact_state.rigid_contact_point0,
+                contact_state.rigid_contact_point1,
+                contact_state.rigid_contact_normal,
+                contact_state.rigid_contact_shape0,
+                contact_state.rigid_contact_shape1,
             ],
             outputs=[body_f],
             device=model.device,
@@ -1668,10 +1667,10 @@ def compute_forces(model, state, particle_f, body_f, requires_grad):
             inputs=[
                 state.particle_q,
                 state.particle_qd,
-                state.body_q,
-                state.body_qd,
                 model.particle_radius,
                 model.particle_flags,
+                state.body_q,
+                state.body_qd,
                 model.body_com,
                 model.shape_body,
                 model.shape_materials,
@@ -1829,7 +1828,6 @@ class SemiImplicitIntegrator:
                         model.particle_flags,
                         model.gravity,
                         dt,
-                        model.particle_max_velocity,
                     ],
                     outputs=[state_out.particle_q, state_out.particle_qd],
                     device=model.device,
@@ -1918,7 +1916,6 @@ def init_state(model, state_in, state_out, dt):
             model.particle_flags,
             model.gravity,
             dt,
-            model.particle_max_velocity,
         ],
         outputs=[state_out.particle_q, state_out.particle_qd],
         device=model.device,
@@ -1962,7 +1959,7 @@ class VariationalImplicitIntegrator:
                     compute_forces(model, state_out, self.particle_f, None)
                     compute_residual(model, state_in, state_out, self.particle_f, dfdx, dt)
 
-                # initialize output state using the input velocity to create 'predicted state'
+                # initialize oututput state using the input velocity to create 'predicted state'
                 init_state(model, state_in, state_out, dt)
 
                 # our optimization variable
