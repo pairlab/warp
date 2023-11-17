@@ -78,6 +78,7 @@ class Example:
 if __name__ == "__main__":
     stage_path = os.path.join(os.path.dirname(__file__), "outputs/example_sim_rigid_force.usd")
 
+    # example = Example(stage_path)
     example = Example(stage_path)
 
     for i in range(example.sim_frames):

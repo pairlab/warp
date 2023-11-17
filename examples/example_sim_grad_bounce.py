@@ -87,7 +87,12 @@ class Bounce:
 
         self.stage = None
         if (render):
-            self.stage = wp.sim.render.SimRendererNano(
+            # self.stage = wp.sim.render.SimRendererNano(
+            #     self.model,
+            #     os.path.join(os.path.dirname(__file__), "outputs/example_sim_grad_bounce.usd"),
+            #     scaling=4.0)
+
+            self.stage = wp.sim.render.SimRenderer(
                 self.model,
                 os.path.join(os.path.dirname(__file__), "outputs/example_sim_grad_bounce.usd"),
                 scaling=4.0)

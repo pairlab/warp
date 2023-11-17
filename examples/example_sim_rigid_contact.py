@@ -123,15 +123,15 @@ class Example:
             kd=self.kd,
             kf=self.kf)
 
-            s = builder.add_shape_mesh(
-                body=b,
-                mesh=bunny,
-                pos=(0.0, 0.0, 0.0),
-                scale=(self.scale, self.scale, self.scale),
-                ke=self.ke,
-                kd=self.kd,
-                kf=self.kf,
-                density=1e3,
+        s = builder.add_shape_mesh(
+            body=b,
+            mesh=bunny,
+            pos=(0.0, 0.0, 0.0),
+            scale=(self.scale, self.scale, self.scale),
+            ke=self.ke,
+            kd=self.kd,
+            kf=self.kf,
+            density=1e3,
             )
 
         # finalize model
@@ -142,6 +142,7 @@ class Example:
         self.model.joint_attach_kd = 20.0
 
         self.integrator = wp.sim.SemiImplicitIntegrator()
+        self.model.integrator = self.integrator # had to add this line for some reason
 
         # -----------------------
         # set up Usd renderer

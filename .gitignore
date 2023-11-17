@@ -29,5 +29,6 @@ exts/omni.warp/config/extension.gen.toml
 /build
 /dist
 pair-warp
+pair_warp
 warp/bin
 outputs/
