@@ -36,7 +36,6 @@ import argparse
 
 wp.init()
 
-
 class Example:
     frame_dt = 1.0 / 60.0
 
@@ -126,82 +125,13 @@ class Example:
 
         return wp.sim.Mesh(points, indices)
 
+    # original version
     # def update(self):
-    #     # for _ in range(self.sim_substeps):
-    #     state_in = self.state_0
-    #     # for state_out in self.state_list:c
-    #     for i in range(len(self.state_list)):
-    #         state_in.clear_forces()
-    #         wp.sim.collide(self.model, state_in)
-    #         self.state_list[i] = self.model.state(requires_grad = True)
-    #         self.integrator.simulate(self.model, state_in, self.state_list[i] , self.sim_dt)
-    #         # state_in, state_out = state_out, state_in
-    #         state_in = self.state_list[i]
-        
-        # self.state_0 = self.state_list[-1]
-
-    # Jeremy's version
-    # def update(self):
-    #     # self.state_list[0] = self.state_0
-    #     for i in range(self.sim_substeps):
+    #     for _ in range(self.sim_substeps):
     #         self.state_0.clear_forces()
     #         wp.sim.collide(self.model, self.state_0)
-    #         # self.state_1 = self.model.state(requires_grad = True)
     #         self.integrator.simulate(self.model, self.state_0, self.state_1, self.sim_dt)
-    #         self.state_list[i] = self.state_1 # adding the most recent state to the list
     #         self.state_0, self.state_1 = self.state_1, self.state_0
-
-    # gets identity correct for any number of substeps, but still overwrites tape
-    # def update(self):
-    #     for i in range(self.sim_substeps):
-    #         self.state_0.clear_forces()
-    #         wp.sim.collide(self.model, self.state_0)
-    #         if i < self.sim_substeps - 1:
-    #             # Use a temporary state for intermediate steps
-    #             temp_state = self.model.state(requires_grad=True)
-    #             self.integrator.simulate(self.model, self.state_0, temp_state, self.sim_dt)
-    #             # Update state_0 to the new state
-    #             self.state_0 = temp_state
-    #         else:
-    #             # In the last step, update state_1
-    #             self.integrator.simulate(self.model, self.state_0, self.state_1, self.sim_dt)
-
-    # directly using state_pairs
-    # def update(self):
-    #     # self.state_list[0] = self.state_0
-    #     self.state_pairs = list(zip([self.state_0] + self.state_list[:-1], self.state_list)) # [(state_0, state_1), (state_1, state_2), ...]
-
-    #     for i in range(self.sim_substeps):
-    #         self.state_pairs[i][0].clear_forces()
-    #         wp.sim.collide(self.model, self.state_pairs[i][0])
-    #         self.integrator.simulate(self.model, self.state_pairs[i][0], self.state_pairs[i][1], self.sim_dt)
-    #         # self.state_list[i] = self.state_1 # adding the most recent state to the list
-    #         # adding most recent state to list
-    #         if i < self.sim_substeps - 1:
-    #             self.state_pairs[i][1] = self.state_pairs[i+1][0]
-    #         # self.state_0, self.state_1 = self.state_1, self.state_0
-
-    #     self.state_0 = self.state_pairs[-1][0]
-    #     self.state_1 = self.state_pairs[-1][1]
-
-    # # directly using state_pairs as list of lists
-    # def update(self):
-    #     # self.state_list[0] = self.state_0
-    #     # self.state_pairs = list(zip([self.state_0] + self.state_list[:-1], self.state_list)) # [(state_0, state_1), (state_1, state_2), ...]
-    #     # self.state_pairs = list(zip([self.model.state(requires_grad = True) for i in range(self.sim_substeps)], [self.model.state(requires_grad = True) for i in range(self.sim_substeps)]))
-    #     self.state_pairs = [[self.model.state(requires_grad = True), self.model.state(requires_grad = True)] for i in range(self.sim_substeps)]
-
-    #     # for state_in, state_out in self.state_pairs:
-    #     for i in range(self.sim_substeps):
-    #         self.state_pairs[i][0].clear_forces()
-    #         wp.sim.collide(self.model, self.state_pairs[i][0])
-    #         self.integrator.simulate(self.model, self.state_pairs[i][0], self.state_pairs[i][1], self.sim_dt)
-
-    #         if i < self.sim_substeps - 1:
-    #             self.state_pairs[i+1][0] = self.state_pairs[i][1] # this might be problematic
-
-    #     self.state_0 = self.state_pairs[-1][0]
-    #     self.state_1 = self.state_pairs[-1][1]
 
     # dynamically building state_list
     def update(self):
@@ -282,30 +212,6 @@ class Example:
     #     # return state, state_out
     #     # return state_next
 
-    # # Krishnan's version
-    # def update(self):
-    # # self.state_list[0] = self.state_0
-    # state_pairs = zip([self.state_0] + self.state_list[:-1], self.state_list)
-
-    # # for i in range(self.sim_substeps): # TODO: pop off intermediate states from state list 
-    # for state_in, state_out in state_pairs:
-    #     state_in.clear_forces()
-    #     wp.sim.collide(self.model, state_in)
-    #     # self.state_1 = self.model.state(requires_grad = True)
-    #     self.integrator.simulate(self.model, state_in, state_out, self.sim_dt)
-    #     # self.state_list[i] = self.state_1 # adding the most recent state to the list
-    #     # self.state_0, self.state_1 = self.state_1, self.state_0
-
-    # dynamically building state_list
-    def update_for_jacobian(self, start_state):
-        start_state.clear_forces()
-        wp.sim.collide(self.model, start_state)
-
-        end_state = self.model.state(requires_grad = True)
-        self.integrator.simulate(model=self.model, state_in=start_state, state_out=end_state, dt=self.sim_dt, requires_grad=True)
-
-        return end_state
-
     def render(self, is_live=False):
         time = 0.0 if is_live else self.sim_time
 
@@ -320,6 +226,7 @@ class Example:
         return wp.array([v[0:3], wp.quat_from_axis_angle(v[3:7])])
 
     @wp.kernel
+    # dumb version
     # @jacobian_check(input_names=["state_0", "state_1"], output_names=["manipulability"])
     def manipulability_kernel(state_0: wp.array(dtype=wp.transformf), state_1: wp.array(dtype=wp.transformf), manipulability: wp.array(dtype=wp.float32, ndim=2)):
     # def manipulability_kernel(state_in: wp.array(dtype=wp.transformf), state_out: wp.array(dtype=wp.transformf)):
@@ -346,6 +253,7 @@ class Example:
         # manipulability = (cube_1 - cube_0) / (ball_1 - ball_0)
         # manipulability = wp.cw_div((cube_1_trans - cube_0_trans), (ball_1_trans - ball_0_trans))
 
+    # from https://nvidia.github.io/warp/_build/html/modules/runtime.html#jacobians
     # @tape_check(tol=1e-5, check_nans=False)
     def get_manipulability_ad(self, inner_tape, dim):
         manipulability_ad = np.empty((dim, dim), dtype=np.float32) # we want to compute the Jacobian of the cube output with respect to the ball input.
@@ -382,85 +290,19 @@ class Example:
         # manipulability_fd = tape_jacobian_fd(tape=tape, inputs=[self.prev_state.body_q], outputs=[self.curr_state.body_q], eps=1e-4, max_fd_dims_per_var=500)
         return wp.array(manipulability_fd, dtype=wp.float32)
 
-    # @wp.func
-    # def simulate_step(model: wp.sim.model.Model, integrator: wp.sim.SemiImplicitIntegrator, state_in: wp.array(dtype=wp.transformf), state_out: wp.array(dtype=wp.transformf), sim_dt: wp.float32):
-    #     state_in.clear_forces()
-    #     wp.sim.collide(model, state_in)
-    #     integrator.simulate(model, state_in, state_out, sim_dt)
-
-    # @wp.kernel
-    # def manipulability_fd_kernel(in_state: wp.array(dtype=wp.transformf), out_state: wp.array(dtype=wp.transformf), manipulability: wp.array(dtype=wp.float32, ndim=2), f: wp.func, model: wp.sim.model.Model, sim_dt: wp.float32):
-    # # def manipulability_fd_kernel(self, in_state, dim, eps=1e-5, manipulability: wp.array(dtype=wp.float32, ndim=2)):
-    #     eps=1e-5
-    #     # num_in = len(x)
-    #     # num_out = len(f(x))
-    #     # self.integrator.simulate(self.model, self.state_0, self.state_1, self.sim_dt)
-    #     for i in range(14):
-    #         in_state[i].body_q += eps
-    #         f1 = f(model, in_state, out_state, sim_dt)
-    #         in_state[i].body_q -= 2 * eps
-    #         f2 = f(model, in_state, out_state, sim_dt)
-    #         in_state[i].body_q += eps
-    #         manipulability[:, i] = (f1 - f2) / (2 * eps)
-    #     return manipulability
-
-    # from example_sim_grad_control.py
-    # @wp.kernel
-    # def inplace_assign(a: wp.array(dtype=wp.float32), b: wp.array(dtype=wp.float32)):
-    #     tid = wp.tid()
-    #     b[tid] = a[tid]
-
-    def warp_step_generalized(self, q: wp.array, qd: wp.array, tau: wp.array, q_next: wp.array, qd_next: wp.array, requires_grad=False, check_diffs=False):
-        """
-        Advances the system dynamics given the generalized rigid-body state and joint torques [q, qd, tau].
-        Simulates for the set number of substeps and returns the next state in generalized coordinates [q_next, qd_next].
-        XXX The forward kinematics and inverse kinematics projection steps may lead to known numerical issues where the
-        32-bit floating point precision is not sufficient to represent the state updates, leading to a damped/frozen system.
-        """
-
-        if check_diffs:
-            model_before = self.builder.finalize(self.device)
-
-        # start_state = self.model.state(requires_grad=requires_grad)
-        # wp.sim.eval_fk(self.model, q, qd, None, start_state)
-        start_state = self.state_0
-        # start_state = self.curr_state
-
-
+    # single substep version for finite difference
+    def update_for_jacobian(self, start_state):
         start_state.clear_forces()
         wp.sim.collide(self.model, start_state)
 
         end_state = self.model.state(requires_grad = True)
+        self.integrator.simulate(model=self.model, state_in=start_state, state_out=end_state, dt=self.sim_dt, requires_grad=True)
 
-        # assign input controls as joint torques
-        # wp.launch(self.inplace_assign, dim=3, inputs=[tau], outputs=[self.model.joint_act], device=self.device)
-
-        # end_state = self.simulate(start_state, requires_grad=requires_grad)
-        # end_state = self.integrator.simulate(model=self.model, state_in=self.state_0, state_out=self.state_1, dt=self.sim_dt, requires_grad=requires_grad)
-        self.integrator.simulate(model=self.model, state_in=start_state, state_out=end_state, dt=self.sim_dt, requires_grad=requires_grad)
-
-        wp.sim.eval_ik(self.model, end_state, q_next, qd_next)
-
-        if check_diffs:
-            assert requires_grad, "check_diffs requires requires_grad=True because the state gets overwritten otherwise"
-            # check which arrays in model were modified
-            for key, value in vars(model_before).items():
-                if isinstance(value, wp.array) and len(value) > 0:
-                    if not np.allclose(value.numpy(), getattr(self.model, key).numpy()):
-                        print(f"model.{key} was modified")
-                        print("  before:", value.numpy().flatten())
-                        print("  after: ", getattr(self.model, key).numpy().flatten())
-            # check which arrays in state were modified
-            for key, value in vars(start_state).items():
-                if isinstance(value, wp.array) and len(value) > 0:
-                    if not np.allclose(value.numpy(), getattr(end_state, key).numpy()):
-                        print(f"state.{key} was modified")
-                        print("  before:", value.numpy().flatten())
-                        print("  after: ", getattr(end_state, key).numpy().flatten())
-
-        # if (self.render):
-        #     self._render(end_state)
-
+        return end_state
+    
+   
+    
+    
     @staticmethod
     def fd_jacobian(f, x, eps=1e-5):
         num_in = len(x)
@@ -475,64 +317,48 @@ class Example:
             jac[:, i] = (f1 - f2) / (2 * eps)
         return jac
 
-    def fd_jacobian_generalized(self, q: np.ndarray, qd: np.ndarray, tau: np.ndarray, eps=1e-5):
-        # build a vector function that accepts the concatenation of (q, qd, tau) and
-        # returns the concatenation of (q_next, qd_next)
-        def f(q_qd_tau):
-            # dof = 3
-            # q = wp.array(q_qd_tau[:self.dof_q], dtype=wp.float32, device=self.device)
-            # qd = wp.array(q_qd_tau[self.dof_q:self.dof_q + self.dof_qd], dtype=wp.float32, device=self.device)
-            # tau = wp.array(q_qd_tau[-self.dof_qd:], dtype=wp.float32, device=self.device)
+    def get_manipulability_fd(self, state, dim, eps=1e-5, input_index=1, output_index=0):
+        manipulability_fd = np.empty((dim, dim), dtype=np.float32)
 
-            # q = wp.array(q_qd_tau[:dof], dtype=wp.float32, device=self.device)
-            # qd = wp.array(q_qd_tau[dof:2*dof], dtype=wp.float32, device=self.device)
-            # tau = wp.array(q_qd_tau[-dof:], dtype=wp.float32, device=self.device)
+        for i in range(dim):
+            state_numpy = state.body_q.numpy()
+            state_numpy[input_index][i] += eps # perturbing the ball (x + eps)
+            state.body_q = wp.array(state_numpy, dtype=wp.transformf)
+            next_state_1 = self.update_for_jacobian(state)
+            state_numpy[input_index][i] -= 2 * eps # perturbing the ball the other way (x - eps)
+            state.body_q = wp.array(state_numpy, dtype=wp.transformf)
+            next_state_2 = self.update_for_jacobian(state)
 
-            q = wp.array(q_qd_tau[:7], dtype=wp.float32, device=self.device)
-            qd = wp.array(q_qd_tau[7:13], dtype=wp.float32, device=self.device)
-            tau = wp.array(q_qd_tau[13:], dtype=wp.float32, device=self.device)
+            # dcube/dball, input = ball pose, output = cube pose
+            manipulability_fd[i, :] = (next_state_1.body_q.numpy()[output_index] - next_state_2.body_q.numpy()[output_index]) / (2 * eps)
 
-            # print("q in f: ", q.shape)
-            # print("qd in f: ", qd.shape)
-            # print("tau in f: ", tau.shape)
+        return manipulability_fd
+    
+     # # single substep version for finite difference
+    # # def update_for_jacobian_func(start_state, model, integrator, sim_dt):
+    # @wp.func
+    # def update_for_jacobian_func(start_state: wp.array(dtype=wp.transformf), model: wp.sim.model.Model, integrator: wp.sim.SemiImplicitIntegrator, sim_dt: wp.float32):
+    #     start_state.clear_forces()
+    #     wp.sim.collide(model, start_state)
+    #     end_state = model.state(requires_grad = True)
+    #     integrator.simulate(model=model, state_in=start_state, state_out=end_state, dt=sim_dt, requires_grad=True)
 
-            q_next = wp.zeros_like(q)
-            qd_next = wp.zeros_like(qd)
-            self.warp_step_generalized(q, qd, tau, q_next, qd_next)
-            return np.concatenate([q_next.numpy(), qd_next.numpy()])
+    #     return end_state
+    
+    # @wp.kernel
+    # def manipulability_fd_kernel(state_0: wp.array(dtype=wp.transformf), state_1: wp.array(dtype=wp.transformf), dim: wp.int32, eps: wp.float32, manipulability: wp.array(dtype=wp.float32, ndim=2)):
+    #     for i in range(dim):
+    #         state_numpy = state_1[i]
+    #         state_numpy[1][i] += eps
+    #         state_1[i] = state_numpy
+    #         next_state_1 = update_for_jacobian_func(state_1)
+    #         state_numpy[1][i] -= 2 * eps
+    #         state_1[i] = state_numpy
+    #         next_state_2 = update_for_jacobian_func(state_1)
 
-        q_qd_tau = np.concatenate([q, qd, tau], dtype=np.float32, axis=0)
-        return self.fd_jacobian(f, q_qd_tau, eps)
+    #         manipulability[i, :] = (next_state_1.body_q.numpy()[0] - next_state_2.body_q.numpy()[0]) / (2 * eps)
 
-    def get_manipulability_fd_generalized(self):
-        print("body_q: ", self.model.body_q.numpy())
-        print("body_qd: ", self.model.body_qd.numpy())
-
-        # q = self.model.body_q.numpy() # (2, 7)
-        # qd = self.model.body_qd.numpy() # (2, 6)
-        q = self.model.body_q.numpy()[0] # (1, 7)
-        qd = self.model.body_qd.numpy()[0] # (1, 6)
-        # q = self.model.body_q.numpy()[:, :3].flatten() # (2, 3) linear translation
-        # qd = self.model.body_qd.numpy()[:, :3].flatten() # (2, 3) linear velocity
-
-        # tau = self.model.joint_act.numpy()
-
-        # randomize inputs
-        # np.random.seed(123)
-        # q = np.random.randn(*q.shape) * 0.5
-        # qd = np.random.randn(*qd.shape) * 6.5
-
-        # tau = np.zeros(self.model.joint_dof_count)  # np.random.randn(sim.dof_qd) * 10.0
-        # tau = np.zeros((2, 3))
-        # tau = np.zeros(6)
-        # tau = np.random.randn(3) * 10.0
-        tau = np.random.randn(6) * 10.0
-
-        print("q:  ", q)
-        print("qd: ", qd)
-        print("tau:", tau)
-
-        return self.fd_jacobian_generalized(q, qd, tau, eps=1e-5)
+    #     return wp.array(manipulability, dtype=wp.float32)
 
     def select_rows_cols(self, arr, rows, cols):
         arr = arr[rows, :]
@@ -550,13 +376,6 @@ class Example:
 
         self.state_list = [self.model.state(requires_grad = True) for i in range(self.sim_substeps - 1)]
         self.state_list.append(self.state_1)
-
-        # self.state_0.body_q.requires_grad = True
-        # self.state_0.body_qd.requires_grad = True
-        # self.state_0.body_f.requires_grad = True
-        # self.state_1.body_q.requires_grad = True
-        # self.state_1.body_qd.requires_grad = True
-        # self.state_1.body_f.requires_grad = True
 
         wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state_0)
         wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state_1)
@@ -626,17 +445,25 @@ class Example:
                         
                         # self.state_0, self.state_1 = self.curr_state, self.prev_state
                         
-                # check_backward_pass(tape=tape)
+                check_backward_pass(tape=tape)
 
                 # check_tape_safety(self.get_manipulability_ad, inputs=[tape, 14])
                 manipulability_ad = self.get_manipulability_ad(tape, dim=14)
+                
                 # manipulability_ad = manipulability_ad.numpy()
 
                 # check_tape_safety(self.get_manipulability_fd_tape, inputs=[tape, 14])
                 # manipulability_fd = self.get_manipulability_fd_tape(tape, dim=14, eps=1e-5)
                 # manipulability_fd = self.get_manipulability_fd(self.state_list[-1], dim=14)
-                # manipulability_fd = self.get_manipulability_fd_generalized()
                 # manipulability_fd = function_jacobian_fd(self.update_for_jacobian, inputs=[self.state_0])
+                # manipulability_fd = self.get_manipulability_fd(self.state_1, dim=7, eps=1e-5, input_index=1, output_index=0)
+                manipulability_fd_0 = self.get_manipulability_fd(self.state_1, dim=7, eps=1e-4, input_index=0, output_index=0)
+                manipulability_fd_1 = self.get_manipulability_fd(self.state_1, dim=7, eps=1e-4, input_index=1, output_index=0)
+                manipulability_fd_2 = self.get_manipulability_fd(self.state_1, dim=7, eps=1e-4, input_index=0, output_index=1)
+                manipulability_fd_3 = self.get_manipulability_fd(self.state_1, dim=7, eps=1e-4, input_index=1, output_index=1)
+
+                # concatenating them together like [[[0,0], [1,0]], [[0,1], [1,1]]], where indices are [input_index, output_index]
+                manipulability_fd = np.concatenate((np.concatenate((manipulability_fd_0, manipulability_fd_1), axis=1), np.concatenate((manipulability_fd_2, manipulability_fd_3), axis=1)), axis=0)
 
                 all_labels = ['cube_x', 'cube_y', 'cube_z',
                             'cube_i', 'cube_j', 'cube_k', 'cube_w',
@@ -645,23 +472,30 @@ class Example:
 
                 # manip_rows = ['cube_x', 'cube_y', 'cube_z']
                 # manip_cols = ['ball_x', 'ball_y', 'ball_z']
-                manip_rows, manip_cols = all_labels, all_labels
+                manip_rows = ['cube_x', 'cube_y', 'cube_z', 'ball_x', 'ball_y', 'ball_z']
+                manip_cols = ['cube_x', 'cube_y', 'cube_z', 'ball_x', 'ball_y', 'ball_z']
+                # manip_rows, manip_cols = all_labels, all_labels
                 
-                # manipulability_ad = self.select_rows_cols(manipulability_ad,
-                #                     rows=[all_labels.index(label) for label in manip_rows],
-                #                     cols=[all_labels.index(label) for label in manip_cols]
-                #                     )
-                print('manipulability (ad): \n', manipulability_ad)
+                manipulability_ad = self.select_rows_cols(manipulability_ad,
+                                    rows=[all_labels.index(label) for label in manip_rows],
+                                    cols=[all_labels.index(label) for label in manip_cols]
+                                    )
+                
+                manipulability_fd = self.select_rows_cols(manipulability_fd,
+                                    rows=[all_labels.index(label) for label in manip_rows],
+                                    cols=[all_labels.index(label) for label in manip_cols]
+                                    )
 
                 # visualizing the autodiff manipulability
-                # labeled_matrix_print(manipulability_ad, manip_rows, manip_cols)
+                print('manipulability_ad: ')
+                labeled_matrix_print(manipulability_ad, manip_rows, manip_cols)
+                print('manipulability_fd: ')
+                labeled_matrix_print(manipulability_fd, manip_rows, manip_cols)
                 # matrix_to_heatmap(manipulability_ad, manip_rows, manip_cols, title="heatmap (ad)", vis=True)
                 # plot_eigenvalues(manipulability_ad, manip_rows, manip_cols, title="eigenvalues (ad)", vis=True)
                 # visualize_unit_ball(manipulability_ad, manip_rows, manip_cols, title="unit ball (ad)", vis=True)
                 # cv2.waitKey(1)  # Small delay to display the image
 
-
-                # print('manipulability (fd): \n', manipulability_fd)
                 # print('determinant: ', np.linalg.det(manipulability_ad.numpy()))
                 # print('trace: ', np.trace(manipulability_ad.numpy()))
                 # print('eigenvalues: ', np.linalg.eigvals(manipulability_ad))
@@ -670,6 +504,8 @@ class Example:
                 # # printing attributes of the state
                 # for attr in dir(self.state_0):
                 #     print("obj.%s = %r" % (attr, getattr(self.state_0, attr)))
+
+                print('checking:\n', (manipulability_fd - manipulability_ad) < 1e-2)
 
             wp.synchronize()
 

@@ -15,7 +15,8 @@
 
 
 from tqdm import trange
-from warp.tests.grad_utils import *
+# from warp.tests.grad_utils import *
+from pair_warp.utils.grad_utils import *
 import warp.sim.render
 import warp.sim
 import os
