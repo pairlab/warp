@@ -445,7 +445,7 @@ class Example:
                         
                         # self.state_0, self.state_1 = self.curr_state, self.prev_state
                         
-                check_backward_pass(tape=tape)
+                # check_backward_pass(tape=tape)
 
                 # check_tape_safety(self.get_manipulability_ad, inputs=[tape, 14])
                 manipulability_ad = self.get_manipulability_ad(tape, dim=14)

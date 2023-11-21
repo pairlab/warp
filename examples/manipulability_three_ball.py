@@ -53,14 +53,14 @@ class Example:
 
         self.enable_rendering = render
 
-        self.num_bodies = 8
         self.scale = 0.8
-        self.ke = 1.e5 # 1.e+2
-        self.kd = 1000.0
-        self.kf = 0.5
+        self.ke = 2.e3 # 1.e+2 # 1.e+5
+        self.kd = 10000.0
+        self.kf = 1000 # 0.5
+        self.num_balls = 3
 
         # boxes
-        cube1 = builder.add_body(origin=wp.transform((0.0, 1.0, 0.0), wp.quat_identity()))
+        cube1 = builder.add_body(origin=wp.transform((0.0, 0.5, 0.0), wp.quat_identity()))
 
         s1 = builder.add_shape_box(
             pos=(0.0, 0.0, 0.0),
@@ -71,30 +71,46 @@ class Example:
             ke=self.ke,
             kd=self.kd,
             kf=self.kf,
+            density=1.e3  # 1000.0 
+            # density=10.  # 1000.0 TODO: change back
         )
 
-        # spheres
-        ball1 = builder.add_body(origin=wp.transform((1.0, 1.0, 0.0), wp.quat_identity()))
+        self.ball_list = []
+        self.ball_pos = {}
 
-        builder.add_shape_sphere(
-            pos=(0.0, 0.0, 0.0), radius=0.75 * self.scale, body=ball1, ke=self.ke, kd=self.kd, kf=self.kf
-        )
+        for i in range(self.num_balls):
+            # index = builder.add_body(origin=wp.transform((wp.cos(wp.pi * 2 * i / self.num_balls), 0.5, wp.sin(wp.pi * 2 * i / self.num_balls)), wp.quat_identity()))
+            ball_pos = (wp.cos(wp.pi * 2 * i / self.num_balls)*0.9, 0.5, wp.sin(wp.pi * 2 * i / self.num_balls)*0.9)
+            index = builder.add_body(origin=wp.transform(ball_pos, wp.quat_identity()))
+            self.ball_pos[index] = ball_pos
 
+            builder.add_shape_sphere(
+                pos=(0.0, 0.0, 0.0), radius=0.75 * self.scale, body=index, ke=self.ke, kd=self.kd, kf=self.kf
+            )
 
-        ball2 = builder.add_body(origin=wp.transform((-0.5, 1.0, 0.866), wp.quat_identity()))
-
-        builder.add_shape_sphere(
-            pos=(0.0, 0.0, 0.0), radius=0.75 * self.scale, body=ball2, ke=self.ke, kd=self.kd, kf=self.kf
-        )
-
-        ball3 = builder.add_body(origin=wp.transform((-0.5, 1.0, -0.866), wp.quat_identity()))
-
-        builder.add_shape_sphere(
-            pos=(0.0, 0.0, 0.0), radius=0.75 * self.scale, body=ball3, ke=self.ke, kd=self.kd, kf=self.kf
-        )
+            self.ball_list.append(index)
 
         # initial ball velocity
-        builder.body_qd[1] = (-1.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        # builder.body_qd[1] = (0.0, 0.0, 0.0, -5.0, 0.0, 0.0)
+
+
+        # # adding a small immobile cube to represent the goal
+        # cube_goal = builder.add_body(origin=wp.transform((4.0, 4.0, 4.0), wp.quat_identity()))
+
+        # builder.add_shape_box(
+        #     pos=(0.0, 0.0, 0.0),
+        #     hx=0.5 * self.scale,
+        #     hy=0.5 * self.scale,
+        #     hz=0.5 * self.scale,
+        #     body=cube_goal,
+        #     # ke=self.ke,
+        #     # kd=self.kd,
+        #     # kf=self.kf,
+        #     ke=0.0,
+        #     kd=0.0,
+        #     kf=0.0,
+        #     # is_solid=False,
+        # )
             
         # ground box
         builder.add_shape_box(
@@ -106,19 +122,41 @@ class Example:
             ke=self.ke,
             kd=self.kd,
             kf=self.kf)
+
+        # for sphere_body in [ball1, ball2, ball3]:
+        for sphere_body in self.ball_list:
+            for i in range(3):
+                axis = np.zeros(3)
+                axis[i] = 1.0
+                builder.add_joint_prismatic(
+                    parent=-1,  # Assuming free movement not relative to another body
+                    child=sphere_body,
+                    parent_xform=wp.transform_identity(),
+                    child_xform=wp.transform_identity(),
+                    mode=wp.sim.JOINT_MODE_TARGET_POSITION,
+                    axis=axis,
+                    target=self.ball_pos[sphere_body][i],
+                    limit_lower=-5.0, limit_upper=5.0,
+                    target_ke=1e8,  # Stiffness
+                    target_kd=1e6  # Damping
+                )
+
+        # axes = {
+        #         "x": [1.0, 0.0, 0.0],
+        #         "y": [0.0, 1.0, 0.0],
+        #         "z": [0.0, 0.0, 1.0],
+        #     }
         
-        for sphere_body in [ball1, ball2, ball3]:
-            builder.add_joint_prismatic(
-                parent=-1,  # Assuming free movement not relative to another body
-                child=sphere_body,
-                parent_xform=wp.transform_identity(),
-                child_xform=wp.transform_identity(),
-                mode=wp.sim.JOINT_MODE_TARGET_POSITION,
-                axis=(0., 1., 0.),
-                limit_lower=-5.0, limit_upper=5.0,
-                target_ke=1e5,  # Stiffness
-                target_kd=10.0  # Damping
-    )
+        # builder.add_joint_d6(
+        #         linear_axes=[wp.sim.JointAxis(axes[a]) for a in axes],
+        #         angular_axes=[wp.sim.JointAxis(axes[a]) for a in axes],
+        #         parent_xform=wp.transform_identity(),
+        #         child_xform=wp.transform_identity(),
+        #         parent=-1,
+        #         child=ball1,
+        #         name="ball1",
+
+        #     )
 
         # finalize model
         self.model = builder.finalize()
@@ -169,6 +207,67 @@ class Example:
         self.state_0 = self.state_list[-2]
         self.state_1 = self.state_list[-1]
 
+    # # Krishnan's version
+    # def update(
+    #     self,
+    #     model,
+    #     integrator,
+    #     state_in,
+    #     state_out,
+    #     state_list=None,
+    #     substeps=10,
+    #     dt=1.0 / 60.0,
+    #     body_f=None,
+    #     joint_q=None,
+    #     joint_qd=None,
+    #     act_params: dict = None,
+    #     record_forward=False,
+    #     ):
+    #     # if in graph capture mode, only use state_in and state_out
+    #     if record_forward:
+    #         state_list = [state_out for _ in range(substeps - 1)]
+    #     # setup state_list if not provided
+    #     if state_list is None or len(state_list) == 0:
+    #         state_list = [model.state() for _ in range(substeps - 1)]
+
+    #     # run forward simulate substeps with integrator
+    #     for state, state_next in zip([state_in] + state_list[:-1], state_list[1:] + [state_out]):
+    #         state.clear_forces()
+    #         if model.ground:
+    #             wp.sim.collide(model, state_in)
+    #         state_next = integrator.simulate(
+    #             model,
+    #             state,
+    #             state_next,
+    #             dt,
+    #         )
+    #         # if state_next is not state_out:
+    #         #     state_next.clear_forces()
+
+    #     # # if body_f is included (to compute grads from body_f), copy (Euler) or integrate body_f (XPBD)
+    #     # if body_f is not None:
+    #     #     if isinstance(integrator, wp.sim.SemiImplicitIntegrator):
+    #     #         body_f.assign(state_list[1].body_f)  # takes instantaneous force from last substep
+    #     #     elif isinstance(integrator, wp.sim.XPBDIntegrator):
+    #     #         # captures applied joint torques
+    #     #         body_f.assign(state_out.body_f)
+    #     #         integrate_body_f(
+    #     #             model,
+    #     #             state_in.body_qd,
+    #     #             state_out.body_q,
+    #     #             state_out.body_qd,
+    #     #             body_f,
+    #     #             dt * substeps,
+    #     #         )
+    #     # if joint_q is not None:
+    #     #     wp.sim.eval_ik(model, state_out, joint_q, joint_qd)
+    #     # return state_out.body_q, state_out.body_qd, joint_q, joint_qd
+
+    #     # return state_list
+    #     return state_out
+    #     # return state, state_out
+    #     # return state_next
+
     def render(self, is_live=False):
         time = 0.0 if is_live else self.sim_time
 
@@ -195,15 +294,59 @@ class Example:
         return arr
     
     @wp.kernel
-    def control_balls(
-        time: float,
-        joint_target: wp.array(dtype=float),
+    def control_body_delta(
+        control_deltas: wp.array(dtype=wp.float32),
+        joint_target: wp.array(dtype=wp.float32),
+        action_dim: int,
     ):
-        # set the target position of the revolute joint
-        # tid = wp.tid()
-        # joint_target[tid] = wp.sin(time*2.0 + float(tid))*0.5
-        joint_target[1] = wp.sin(time*10.0)*0.5
+        for i in range(action_dim):
+            joint_target[i] = joint_target[i] + control_deltas[i]
 
+        # tid = wp.tid()
+        # joint_target[tid] = joint_target[tid] + control_deltas[tid]
+
+    @wp.kernel
+    def control_body_abs(
+        control_target: wp.array(dtype=wp.float32),
+        joint_target: wp.array(dtype=wp.float32),
+        action_dim: int,
+    ):
+        for i in range(action_dim):
+            joint_target[i] = control_target[i]
+
+    # @wp.kernel
+    # def get_control_deltas(
+    #     goal: wp.array(dtype=wp.float32),
+    #     err: wp.array(dtype=wp.float32),
+    #     manipulability: wp.array(dtype=wp.float32, ndim=2),
+    #     control_deltas: wp.array(dtype=wp.float32),
+    #     joint_q: wp.array(dtype=wp.transformf),
+    #     scale: float,
+    # ):
+    #     # cube_pos = wp.transform_get_translation(joint_q[0])
+    #     # err = goal - cube_pos
+    #     # goal = wp.transform_get_translation(joint_q[0])
+
+    #     err[0] = goal[0] - wp.transform_get_translation(joint_q[0])[0]
+    #     err[1] = goal[1] - wp.transform_get_translation(joint_q[0])[1]
+    #     err[2] = goal[2] - wp.transform_get_translation(joint_q[0])[2]
+
+    #     # manipulability[0, 0] = 0.
+
+    #     # control_deltas = wp.transpose(err) @ manipulability[:, 3:]
+    #     # control_deltas = wp.matmul(err, manipulability[:, 3:])
+    #     control_deltas = wp.matmul(err, manipulability)
+        # control_deltas = wp.normalize(control_deltas) * scale
+
+    def get_control_deltas(self, goal, curr_state, manipulability,  scale=.1):
+        err = goal - curr_state
+        action = err.T @ manipulability[:, 3:] # ignoring the first 3 columns (cube position) for now TODO: simplify this
+        print('unnormalized action: ', action)
+        if np.linalg.norm(action) > 1e-6:
+            action = action / np.linalg.norm(action) * scale
+        else:
+            action = np.zeros_like(action)
+        return wp.array(action, dtype=wp.float32)
 
     def run(self, render=True):
         # ---------------
@@ -212,6 +355,9 @@ class Example:
         self.sim_time = 0.0
         self.state_0 = self.model.state(requires_grad = True)
         self.state_1 = self.model.state(requires_grad = True)
+        # self.cube_goal = np.array([-1.0, 0.5, 0.0], dtype=np.float32) # move left
+        # self.cube_goal = np.array([1.0, 0.5, -1.0], dtype=np.float32) # move right and back
+        self.cube_goal = np.array([0.0, 3.0, 0.0], dtype=np.float32) # move up
 
         self.state_list = [self.model.state(requires_grad = True) for i in range(self.sim_substeps - 1)]
         self.state_list.append(self.state_1)
@@ -221,8 +367,42 @@ class Example:
 
         profiler = {}
 
+        all_labels = ['cube_x', 'cube_y', 'cube_z','cube_i', 'cube_j', 'cube_k', 'cube_w']
+        for ball in self.ball_list:
+            all_labels += ['ball{}_x'.format(ball), 'ball{}_y'.format(ball), 'ball{}_z'.format(ball), 'ball{}_i'.format(ball), 'ball{}_j'.format(ball), 'ball{}_k'.format(ball), 'ball{}_w'.format(ball)]
+
+        manip_rows = ['cube_x', 'cube_y', 'cube_z']
+        
+        # manip_cols = ['cube_x', 'cube_y', 'cube_z', 'ball1_x', 'ball1_y', 'ball1_z', 'ball2_x', 'ball2_y', 'ball2_z', 'ball3_x', 'ball3_y', 'ball3_z']
+        manip_cols = ['cube_x', 'cube_y', 'cube_z']
+        for ball in self.ball_list:
+            manip_cols += ['ball{}_x'.format(ball), 'ball{}_y'.format(ball), 'ball{}_z'.format(ball)]
+            
+        # manip_rows = all_labels
+        # manip_cols = all_labels
+
+        manipulability_ad = np.zeros((len(manip_rows), len(manip_cols)), dtype=np.float32)
+        manipulability_fd = np.zeros((len(manip_rows), len(manip_cols)), dtype=np.float32)
+        control_deltas = wp.zeros(len(manip_cols) - len(manip_rows), dtype=np.float32)
+
         # simulate
         self.update()
+        # self.state_0, self.state_1 = self.state_1, self.state_0
+        # self.update(model=self.model,
+        #             integrator=self.model.integrator,
+        #             state_in=self.state_0,
+        #             state_out=self.state_1,
+        #             # state_list=self.state_list,
+        #             state_list=None,
+        #             substeps=self.sim_substeps,
+        #             dt=self.sim_dt,
+        #             body_f=None,
+        #             joint_q=None,
+        #             joint_qd=None,
+        #             act_params=None,
+        #             record_forward=False,
+        #         )
+
 
         with wp.ScopedTimer("simulate", detailed=False, print=False, active=False, dict=profiler):
 
@@ -233,85 +413,106 @@ class Example:
                     with wp.ScopedTimer("render", active=False):
                         self.render()
 
-                # cube_pose_np = self.state_1.body_q.numpy()[0]
-                # cube_vel_np = self.state_1.body_qd.numpy()[0]
-                # ball_pose_np = self.state_1.body_q.numpy()[1]
-                # ball_vel_np = self.state_1.body_qd.numpy()[1]
-
-                # manipulability_fd = wp.zeros((14,14), dtype=wp.float32, device=wp.get_device("cuda"), requires_grad=True)
-                manipulability_fd = wp.zeros((3,3), dtype=wp.float32, device=wp.get_device("cuda"), requires_grad=True)
-
                 tape = wp.Tape()
                 with tape:
-                    wp.launch(self.control_balls, dim=1, inputs=[self.sim_time, self.model.joint_q], outputs=[], device="cuda")
-                    # wp.launch(self.manipulability_kernel, dim=1, inputs=[self.state_0.body_q, self.state_1.body_q], outputs=[manipulability_fd], device="cuda")
-                    # wp.launch(self.manipulability_fd_kernel(self.state_0.body_q, self.state_1.body_q, manipulability_fd, self.simulate_step, self.model, self.sim_dt), dim=1, inputs=[self.state_0.body_q, self.state_1.body_q], outputs=[manipulability_fd], device="cuda")
+                    # control_deltas = wp.array([wp.sin(self.sim_time)*.05, wp.sin(self.sim_time)*.05, wp.sin(self.sim_time)*.05, *wp.quat_identity()], dtype=wp.float32)
+                    # control_deltas = wp.array([0,0.5,0, 0,0.5,0, 0,0,0.5,0], dtype=wp.float32) 
+                    control_deltas = self.get_control_deltas(self.cube_goal, self.state_1.body_q.numpy()[0][0:3], manipulability_ad)
+
+                    # err = wp.zeros((1, 3), dtype=wp.float32)
+                    # wp.launch(self.get_control_deltas, dim=1, inputs=[self.cube_goal, err, wp.array(manipulability_fd, dtype=wp.float32, ndim=2), self.model.joint_q, 1.0], outputs=[control_deltas], device="cuda")
+                    
+                    wp.launch(self.control_body_delta, dim=1, inputs=[control_deltas, self.model.joint_target, (len(manip_cols) - len(manip_rows))], outputs=[], device="cuda")
+                    # wp.launch(self.control_body_abs, dim=1, inputs=[self.cube_goal, self.state_1.joint_q], outputs=[], device="cuda")
                     with wp.ScopedTimer("simulate", active=False):
                         self.update()
-   
+                        # self.state_0, self.state_1 = self.state_1, self.state_0
+                        # self.update(model=self.model,
+                        #             integrator=self.model.integrator,
+                        #             state_in=self.state_0,
+                        #             state_out=self.state_1,
+                        #             # state_list=self.state_list,
+                        #             state_list=None,
+                        #             substeps=self.sim_substeps,
+                        #             dt=self.sim_dt,
+                        #             body_f=None,
+                        #             joint_q=None,
+                        #             joint_qd=None,
+                        #             act_params=None,
+                        #             record_forward=False,
+                        #         )
+
+                    # print('self.state_1.body_q: ', self.state_1.body_q)
+                    # print('self.state_1.body_f: ', self.state_1.body_f)
                         
                 # check_backward_pass(tape=tape)
 
-                # manipulability_ad = self.get_manipulability_ad(tape, dim=14)
-                manipulability_ad = get_manipulability_ad(tape, dim=28, input_state=self.state_0, output_state=self.state_1)
+                manipulability_ad = get_manipulability_ad(tape, dim=self.state_0.body_q.shape[0] * 7, input_state=self.state_0, output_state=self.state_1)
                 
-                # # check_tape_safety(self.get_manipulability_fd_tape, inputs=[tape, 14])
-                # # manipulability_fd = self.get_manipulability_fd(self.state_1, dim=7, eps=1e-5, input_index=1, output_index=0)
-                # manipulability_fd_0 = get_manipulability_fd(self.update_for_jacobian, self.state_1, dim=7, eps=1e-4, input_index=0, output_index=0)
-                # manipulability_fd_1 = get_manipulability_fd(self.update_for_jacobian, self.state_1, dim=7, eps=1e-4, input_index=1, output_index=0)
-                # manipulability_fd_2 = get_manipulability_fd(self.update_for_jacobian, self.state_1, dim=7, eps=1e-4, input_index=0, output_index=1)
-                # manipulability_fd_3 = get_manipulability_fd(self.update_for_jacobian, self.state_1, dim=7, eps=1e-4, input_index=1, output_index=1)
-
-                # # concatenating them together like [[[0,0], [1,0]], [[0,1], [1,1]]], where indices are [input_index, output_index]
-                # manipulability_fd = np.concatenate((np.concatenate((manipulability_fd_0, manipulability_fd_1), axis=1), np.concatenate((manipulability_fd_2, manipulability_fd_3), axis=1)), axis=0)
-
-                manipulability_fd = get_manipulability_fd_composed(self.update_for_jacobian, self.state_1, eps=1e-2, input_indices=[0, 1, 2, 3], output_indices=[0, 1, 2, 3])
-
-                all_labels = ['cube_x', 'cube_y', 'cube_z','cube_i', 'cube_j', 'cube_k', 'cube_w',
-                            'ball1_x', 'ball1_y', 'ball1_z', 'ball1_i', 'ball1_j', 'ball1_k', 'ball1_w',
-                            'ball2_x', 'ball2_y', 'ball2_z', 'ball2_i', 'ball2_j', 'ball2_k', 'ball2_w',
-                            'ball3_x', 'ball3_y', 'ball3_z', 'ball3_i', 'ball3_j', 'ball3_k', 'ball3_w',
-                            ]
-
-                manip_rows = ['cube_x', 'cube_y', 'cube_z']
-                manip_cols = ['cube_x', 'cube_y', 'cube_z', 'ball1_x', 'ball1_y', 'ball1_z', 'ball2_x', 'ball2_y', 'ball2_z', 'ball3_x', 'ball3_y', 'ball3_z']
-                # manip_rows, manip_cols = all_labels, all_labels
+                # check_tape_safety(self.get_manipulability_fd_tape, inputs=[tape, 14])
+                
+                # manipulability_fd = self.get_manipulability_fd(self.state_1, dim=7, eps=1e-5, input_index=1, output_index=0)
+                # manipulability_fd = get_manipulability_fd_composed(self.update_for_jacobian, self.state_1, eps=1e-2, input_indices=[0, 1, 2, 3], output_indices=[0, 1, 2, 3])
+                manipulability_fd = get_manipulability_fd_composed(self.update_for_jacobian, self.state_1, eps=1e-5, input_indices=[0, *self.ball_list], output_indices=[0, *self.ball_list])
                 
                 manipulability_ad = self.select_rows_cols(manipulability_ad,
                                     rows=[all_labels.index(label) for label in manip_rows],
                                     cols=[all_labels.index(label) for label in manip_cols]
                                     )
                 
+                # print('manipulability_fd before select: ')
+                # labeled_matrix_print(manipulability_fd, manip_rows, manip_cols)
+
+                print('manipulability_fd before select:\n', manipulability_fd)
+
                 manipulability_fd = self.select_rows_cols(manipulability_fd,
                                     rows=[all_labels.index(label) for label in manip_rows],
                                     cols=[all_labels.index(label) for label in manip_cols]
                                     )
+                
+                print('shape after select: ', manipulability_fd.shape)
 
                 # visualizing the autodiff manipulability
                 print('manipulability_ad: ')
+                labeled_matrix_print(manipulability_ad, manip_rows, manip_cols, precision=6)
                 # print(manipulability_ad)
-                labeled_matrix_print(manipulability_ad, manip_rows, manip_cols)
                 print('manipulability_fd: ')
+                labeled_matrix_print(manipulability_fd, manip_rows, manip_cols, precision=6)
                 # print(manipulability_fd)
-                labeled_matrix_print(manipulability_fd, manip_rows, manip_cols)
+                # matrix_to_heatmap(manipulability_fd, manip_rows, manip_cols, title="heatmap (fd)", vis=True)
                 # matrix_to_heatmap(manipulability_ad, manip_rows, manip_cols, title="heatmap (ad)", vis=True)
                 # plot_eigenvalues(manipulability_ad, manip_rows, manip_cols, title="eigenvalues (ad)", vis=True)
                 # visualize_unit_ball(manipulability_ad, manip_rows, manip_cols, title="unit ball (ad)", vis=True)
-                # cv2.waitKey(1)  # Small delay to display the image
+                # cv2.waitKey(1)  # Small delay to display images
 
-                # print('determinant: ', np.linalg.det(manipulability_ad.numpy()))
-                # print('trace: ', np.trace(manipulability_ad.numpy()))
+                # print('determinant: ', np.linalg.det(manipulability_ad))
+                # print('trace: ', np.trace(manipulability_ad))
                 # print('eigenvalues: ', np.linalg.eigvals(manipulability_ad))
                 # print('eigenvectors: ', np.linalg.eig(manipulability_ad))
-
+                U, S, V = np.linalg.svd(manipulability_fd[:, 3:])
+                print('singular values: ', S)
+                # print('singular vectors: ', V)
+                frobenius_norm = np.linalg.norm(manipulability_fd[:, 3:], ord='fro')
+                print('frobenius norm: ', frobenius_norm)
+                nuclear_norm = np.linalg.norm(manipulability_fd[:, 3:], ord='nuc')
+                print('nuclear norm: ', nuclear_norm)
+                inf_norm = np.linalg.norm(manipulability_fd[:, 3:], ord=np.inf)
+                print('inf norm: ', inf_norm)
+                one_norm = np.linalg.norm(manipulability_fd[:, 3:], ord=1)
+                print('one norm: ', one_norm)
+                two_norm = np.linalg.norm(manipulability_fd[:, 3:], ord=2)
+                print('two norm: ', two_norm)
+                print('error: ', self.cube_goal - self.state_1.body_q.numpy()[0][0:3])
+                print('control_deltas: ', control_deltas)
+                # print('self.state_1.body_q: ', self.state_1.body_q)
+                # print('self.model.joint_target: ', self.model.joint_target)
+                
                 # # printing attributes of the state
                 # for attr in dir(self.state_0):
                 #     print("obj.%s = %r" % (attr, getattr(self.state_0, attr)))
 
-                print('fd == ad:\n', (manipulability_fd - manipulability_ad) < 1e-2)
-                print('\n')
-
-                # self.control_balls()
+                # print('fd == ad:\n', (manipulability_fd - manipulability_ad) < 1e-2)
+                print('\n\n')
 
             wp.synchronize()
 
