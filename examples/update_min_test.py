@@ -65,11 +65,13 @@ class Example:
         self.scale = 0.8
         self.ke = 2.e6 # 1.e+2 # 1.e+5
         self.kd = 250.0
-        self.kf = 100 # 0.5
+        self.kf = 1e10 # 0.5
         # self.ke = 1.e+2
         # self.kd = 250.0
         # self.kf = 500.0
         self.num_balls = self.args.num_balls
+        self.joint_target_ke = 1e8
+        self.joint_target_kd = 1e6
 
         # boxes
         cube1 = builder.add_body(origin=wp.transform((0.0, 0.5, 0.0), wp.quat_identity()))
@@ -83,8 +85,7 @@ class Example:
             ke=self.ke,
             kd=self.kd,
             kf=self.kf,
-            density=1.e4  # 1000.0 
-            # density=10.  # 1000.0 TODO: change back
+            density=1.e3  # 1000.0 
         )
 
         self.ball_list = []
@@ -97,14 +98,16 @@ class Example:
             self.ball_pos[index] = ball_pos
 
             builder.add_shape_sphere(
-                pos=(0.0, 0.0, 0.0), radius=0.75 * self.scale, body=index, ke=self.ke, kd=self.kd, kf=self.kf
+                pos=(0.0, 0.0, 0.0),
+                radius=0.75 * self.scale,
+                body=index,
+                ke=self.ke,
+                kd=self.kd,
+                kf=self.kf,
+                # density=1.e3  # 1000.0
             )
 
             self.ball_list.append(index)
-
-        # initial ball velocity
-        # builder.body_qd[1] = (0.0, 0.0, 0.0, -10.0, 0.0, 0.0)
-
 
         # # adding a small immobile cube to represent the goal
         # cube_goal = builder.add_body(origin=wp.transform((4.0, 4.0, 4.0), wp.quat_identity()))
@@ -137,7 +140,8 @@ class Example:
 
         if self.args.no_control:
             # initial ball velocity
-            builder.body_qd[1] = (0.0, 0.0, 0.0, -5.0, 0.0, 0.0)
+            # builder.body_qd[1] = (0.0, 0.0, 0.0, -5.0, 0.0, 0.0)
+            builder.body_qd[1] = (-5.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         else: # enable dofs
             for sphere_body in self.ball_list:
                 for i in range(3):
@@ -209,84 +213,84 @@ class Example:
     #     for state in self.state_list[:-1]:
     #         state.clear_forces()
 
-    # dynamically building state_list (old)
-    def update(self):
-        self.state_list = [self.state_0]
+    # # dynamically building state_list (old)
+    # def update(self):
+    #     self.state_list = [self.state_0]
 
-        # for state_in, state_out in self.state_pairs:
-        for i in range(self.sim_substeps):
-            self.state_list[-1].clear_forces()
-            wp.sim.collide(self.model, self.state_list[-1])
-            next_state = self.model.state(requires_grad = True)
-            self.integrator.simulate(self.model, self.state_list[-1], next_state, self.sim_dt)
+    #     # for state_in, state_out in self.state_pairs:
+    #     for i in range(self.sim_substeps):
+    #         self.state_list[-1].clear_forces()
+    #         wp.sim.collide(self.model, self.state_list[-1])
+    #         next_state = self.model.state(requires_grad = True)
+    #         self.integrator.simulate(self.model, self.state_list[-1], next_state, self.sim_dt)
 
-            if i < self.sim_substeps - 1:
-                self.state_list.append(next_state)
+    #         if i < self.sim_substeps - 1:
+    #             self.state_list.append(next_state)
 
-        # self.state_0 = self.state_list[1]
-        self.state_0 = self.state_list[-2]
-        self.state_1 = self.state_list[-1]
+    #     # self.state_0 = self.state_list[1]
+    #     self.state_0 = self.state_list[-2]
+    #     self.state_1 = self.state_list[-1]
 
-    # # Krishnan's version
-    # def update(
-    #     self,
-    #     model,
-    #     integrator,
-    #     state_in,
-    #     state_out,
-    #     state_list=None,
-    #     substeps=10,
-    #     dt=1.0 / 60.0,
-    #     body_f=None,
-    #     joint_q=None,
-    #     joint_qd=None,
-    #     act_params: dict = None,
-    #     record_forward=False,
-    #     ):
-    #     # if in graph capture mode, only use state_in and state_out
-    #     if record_forward:
-    #         state_list = [state_out for _ in range(substeps - 1)]
-    #     # setup state_list if not provided
-    #     if state_list is None or len(state_list) == 0:
-    #         state_list = [model.state() for _ in range(substeps - 1)]
+    # Krishnan's version
+    def update(
+        self,
+        model,
+        integrator,
+        state_in,
+        state_out,
+        state_list=None,
+        substeps=10,
+        dt=1.0 / 60.0,
+        body_f=None,
+        joint_q=None,
+        joint_qd=None,
+        act_params: dict = None,
+        record_forward=False,
+        ):
+        # if in graph capture mode, only use state_in and state_out
+        if record_forward:
+            state_list = [state_out for _ in range(substeps - 1)]
+        # setup state_list if not provided
+        if state_list is None or len(state_list) == 0:
+            state_list = [model.state() for _ in range(substeps - 1)]
 
-    #     # run forward simulate substeps with integrator
-    #     for state, state_next in zip([state_in] + state_list[:-1], state_list[1:] + [state_out]):
-    #         state.clear_forces()
-    #         if model.ground:
-    #             wp.sim.collide(model, state_in)
-    #         state_next = integrator.simulate(
-    #             model,
-    #             state,
-    #             state_next,
-    #             dt,
-    #         )
-    #         if state_next is not state_out:
-    #             state_next.clear_forces()
+        # run forward simulate substeps with integrator
+        for state, state_next in zip([state_in] + state_list[:-1], state_list[1:] + [state_out]):
+            state.clear_forces()
+            if model.ground:
+                wp.sim.collide(model, state_in)
+            state_next = integrator.simulate(
+                model,
+                state,
+                state_next,
+                dt,
+            )
+            if state_next is not state_out:
+                state_next.clear_forces()
 
-    #     # # if body_f is included (to compute grads from body_f), copy (Euler) or integrate body_f (XPBD)
-    #     # if body_f is not None:
-    #     #     if isinstance(integrator, wp.sim.SemiImplicitIntegrator):
-    #     #         body_f.assign(state_list[1].body_f)  # takes instantaneous force from last substep
-    #     #     elif isinstance(integrator, wp.sim.XPBDIntegrator):
-    #     #         # captures applied joint torques
-    #     #         body_f.assign(state_out.body_f)
-    #     #         integrate_body_f(
-    #     #             model,
-    #     #             state_in.body_qd,
-    #     #             state_out.body_q,
-    #     #             state_out.body_qd,
-    #     #             body_f,
-    #     #             dt * substeps,
-    #     #         )
-    #     # if joint_q is not None:
-    #     #     wp.sim.eval_ik(model, state_out, joint_q, joint_qd)
-    #     # return state_out.body_q, state_out.body_qd, joint_q, joint_qd
+        # # if body_f is included (to compute grads from body_f), copy (Euler) or integrate body_f (XPBD)
+        # if body_f is not None:
+        #     if isinstance(integrator, wp.sim.SemiImplicitIntegrator):
+        #         body_f.assign(state_list[1].body_f)  # takes instantaneous force from last substep
+        #     elif isinstance(integrator, wp.sim.XPBDIntegrator):
+        #         # captures applied joint torques
+        #         body_f.assign(state_out.body_f)
+        #         integrate_body_f(
+        #             model,
+        #             state_in.body_qd,
+        #             state_out.body_q,
+        #             state_out.body_qd,
+        #             body_f,
+        #             dt * substeps,
+        #         )
+        # if joint_q is not None:
+        #     wp.sim.eval_ik(model, state_out, joint_q, joint_qd)
+        # return state_out.body_q, state_out.body_qd, joint_q, joint_qd
 
-    #     # return state_list
-    #     # return state_out
-    #     # return state, state_out
-    #     return state_next
+        # return state_list
+        return state_out
+        # return state, state_out
+        # return state_next
 
     # # from example_sim_grad_control.py
     # def update(self, state: wp.sim.State, requires_grad=True) -> wp.sim.State:
@@ -294,16 +298,36 @@ class Example:
     #     Simulate the system for the given states.
     #     """
     #     for _ in range(self.sim_substeps):
+    #         self.model.allocate_rigid_contacts(requires_grad=requires_grad)
+    #         if requires_grad:
+    #             next_state = self.model.state(requires_grad=True)
+    #         else:
+    #             next_state = state
+    #         next_state.clear_forces()
+
+    #         # if self.model.ground:
+    #         # self.model.allocate_rigid_contacts(requires_grad=requires_grad)
+    #         wp.sim.collide(self.model, state)
+    #         state = self.integrator.simulate(self.model, state, next_state, self.sim_dt, requires_grad=requires_grad)
+
+    #     return state
+
+    # # from example_sim_rigid_trajopt.py
+    # def update(self, state: wp.sim.State, requires_grad=False) -> wp.sim.State:
+    #     """
+    #     Simulate the system for the given states.
+    #     """
+
+    #     for _ in range(self.sim_substeps):
     #         if requires_grad:
     #             next_state = self.model.state(requires_grad=True)
     #         else:
     #             next_state = state
     #             next_state.clear_forces()
+
     #         if self.model.ground:
-    #             self.model.allocate_rigid_contacts(requires_grad=requires_grad)
     #             wp.sim.collide(self.model, state)
     #         state = self.integrator.simulate(self.model, state, next_state, self.sim_dt, requires_grad=requires_grad)
-
     #     return state
 
     def render(self, is_live=False):
@@ -325,24 +349,41 @@ class Example:
 
     #     return end_state
 
-    # full substep version for finite difference
+    # # full substep version for finite difference
+    # def update_for_jacobian(self, start_state, substeps=2):
+    #     state_list = [start_state]
+
+    #     for i in range(substeps):
+    #         # self.state_list[-1].clear_forces()
+    #         wp.sim.collide(self.model, state_list[-1])
+    #         next_state = self.model.state(requires_grad = True)
+    #         self.integrator.simulate(self.model, state_list[-1], next_state, self.sim_dt)
+
+    #         if i < self.sim_substeps - 1:
+    #             state_list.append(next_state)
+
+    #     end_state = state_list[-1]
+
+    #     for state in self.state_list:
+    #         state.clear_forces()
+
+    # krishnan's version
     def update_for_jacobian(self, start_state, substeps=2):
-        state_list = [start_state]
-
-        for i in range(substeps):
-            # self.state_list[-1].clear_forces()
-            wp.sim.collide(self.model, state_list[-1])
-            next_state = self.model.state(requires_grad = True)
-            self.integrator.simulate(self.model, state_list[-1], next_state, self.sim_dt)
-
-            if i < self.sim_substeps - 1:
-                state_list.append(next_state)
-
-        end_state = state_list[-1]
-
-        for state in self.state_list:
-            state.clear_forces()
-
+        end_state = self.model.state(requires_grad=True)
+        self.update(model=self.model,
+                    integrator=self.model.integrator,
+                    state_in=start_state,
+                    state_out=end_state,
+                    state_list=None,
+                    substeps=substeps,
+                    dt=self.sim_dt,
+                    body_f=None,
+                    joint_q=None,
+                    joint_qd=None,
+                    act_params=None,
+                    record_forward=False,
+                )
+        
         return end_state
 
     # # single substep version for finite difference
@@ -396,7 +437,7 @@ class Example:
     def get_control_deltas(self, goal, curr_state, manipulability,  scale=.1):
         err = goal - curr_state
         print('goal error: ', err)
-        action = err.T @ manipulability[:, 3:] # ignoring the first 3 columns (cube position) for now TODO: simplify this
+        action = err.T @ manipulability
         print('unnormalized action: ', action)
         if np.linalg.norm(action) > 1e-6:
             action = action / np.linalg.norm(action) * scale
@@ -434,7 +475,7 @@ class Example:
             manip_cols = ['cube_x', 'cube_y', 'cube_z'] # inputs
         else:
             manip_rows = ['cube_x', 'cube_y', 'cube_z'] # outputs
-            manip_cols = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']]
+            manip_cols = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # inputs
 
         # manip_rows = all_labels
         # manip_cols = all_labels
@@ -447,30 +488,29 @@ class Example:
 
         # tape = wp.Tape()
         # with tape:
-        self.update()
+        # self.update()
             # tape.forward()
         # check_backward_pass(tape=tape)
 
         # self.state_0, self.state_1 = self.state_1, self.state_0
-        # self.state_0 = self.state_1
-        # self.update(model=self.model,
-        #             integrator=self.model.integrator,
-        #             state_in=self.state_0,
-        #             state_out=self.state_1,
-        #             # state_list=self.state_list,
-        #             state_list=None,
-        #             substeps=self.sim_substeps,
-        #             dt=self.sim_dt,
-        #             body_f=None,
-        #             joint_q=None,
-        #             joint_qd=None,
-        #             act_params=None,
-        #             record_forward=False,
-        #         )
+        self.state_0 = self.state_1
+        self.update(model=self.model,
+                    integrator=self.model.integrator,
+                    state_in=self.state_0,
+                    state_out=self.state_1,
+                    # state_list=self.state_list,
+                    state_list=None,
+                    substeps=self.sim_substeps,
+                    dt=self.sim_dt,
+                    body_f=None,
+                    joint_q=None,
+                    joint_qd=None,
+                    act_params=None,
+                    record_forward=False,
+                )
 
         # self.state_1 = self.update(self.state_0, requires_grad=True)
         # self.state_1 = self.update(self.state_1, requires_grad=True)
-
 
         with wp.ScopedTimer("simulate", detailed=False, print=False, active=False, dict=profiler):
 
@@ -490,32 +530,37 @@ class Example:
                     # wp.launch(self.get_control_deltas, dim=1, inputs=[self.cube_goal, err, wp.array(manipulability_fd, dtype=wp.float32, ndim=2), self.model.joint_q, 1.0], outputs=[control_deltas], device="cuda")
                     if not self.args.no_control:
                         if self.args.move_obj:
-                            control_deltas = self.get_control_deltas(self.cube_goal, self.state_1.body_q.numpy()[0][0:3], manipulability_fd.T)
+                            control_deltas = self.get_control_deltas(self.cube_goal, self.state_1.body_q.numpy()[0][0:3], manipulability_fd.T[:, 3:])
+                            print('action_dim: ', len(manip_rows) - len(manip_cols))
+                            wp.launch(self.control_body_delta, dim=1, inputs=[control_deltas, self.model.joint_target, (len(manip_rows) - len(manip_cols))], outputs=[], device="cuda")
                         else:
-                            control_deltas = self.get_control_deltas(self.cube_goal, self.state_1.body_q.numpy()[0][0:3], manipulability_fd)
+                            control_deltas = self.get_control_deltas(self.cube_goal, self.state_1.body_q.numpy()[0][0:3], manipulability_fd[:, 3:]) # ignoring the first 3 columns (cube position) for now TODO: simplify this
+                            print('action_dim: ', len(manip_cols) - len(manip_rows))
+                            wp.launch(self.control_body_delta, dim=1, inputs=[control_deltas, self.model.joint_target, (len(manip_cols) - len(manip_rows))], outputs=[], device="cuda")
                         
                         print('control_deltas: ', control_deltas)
-                        wp.launch(self.control_body_delta, dim=1, inputs=[control_deltas, self.model.joint_target, (len(manip_cols) - len(manip_rows))], outputs=[], device="cuda")
+                        # self.model.joint_target_ke = wp.array([self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke], dtype=wp.float32)
+                        # self.model.joint_target_kd = wp.array([self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd], dtype=wp.float32)
                     # wp.launch(self.control_body_abs, dim=1, inputs=[self.cube_goal, self.state_1.joint_q], outputs=[], device="cuda")
 
                     with wp.ScopedTimer("simulate", active=False):
-                        self.update()
+                        # self.update()
                         # self.state_0, self.state_1 = self.state_1, self.state_0
-                        # self.state_0 = self.state_1
-                        # self.update(model=self.model,
-                        #             integrator=self.model.integrator,
-                        #             state_in=self.state_0,
-                        #             state_out=self.state_1,
-                        #             # state_list=self.state_list,
-                        #             state_list=None,
-                        #             substeps=self.sim_substeps,
-                        #             dt=self.sim_dt,
-                        #             body_f=None,
-                        #             joint_q=None,
-                        #             joint_qd=None,
-                        #             act_params=None,
-                        #             record_forward=False,
-                        #         )
+                        self.state_0 = self.state_1
+                        self.update(model=self.model,
+                                    integrator=self.model.integrator,
+                                    state_in=self.state_0,
+                                    state_out=self.state_1,
+                                    # state_list=self.state_list,
+                                    state_list=None,
+                                    substeps=self.sim_substeps,
+                                    dt=self.sim_dt,
+                                    body_f=None,
+                                    joint_q=None,
+                                    joint_qd=None,
+                                    act_params=None,
+                                    record_forward=False,
+                                )
                         
                         # self.state_1 = self.update(self.state_0, requires_grad=True)
 
@@ -538,8 +583,8 @@ class Example:
                 self.model.joint_target_ke = wp.array([0., 0., 0., 0., 0., 0.], dtype=wp.float32)
                 self.model.joint_target_kd = wp.array([0., 0., 0., 0., 0., 0.], dtype=wp.float32)
                 manipulability_fd = get_manipulability_fd_composed(self.update_for_jacobian, self.state_1, eps=1e-1, input_indices=[0, *self.ball_list], output_indices=[0, *self.ball_list])
-                self.model.joint_target_ke = wp.array([1e8, 1e8, 1e8, 1e8, 1e8, 1e8], dtype=wp.float32)
-                self.model.joint_target_kd = wp.array([1e6, 1e6, 1e6, 1e6, 1e6, 1e6], dtype=wp.float32)
+                self.model.joint_target_ke = wp.array([self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke], dtype=wp.float32)
+                self.model.joint_target_kd = wp.array([self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd], dtype=wp.float32)
 
                 manipulability_ad = self.select_rows_cols(manipulability_ad,
                                     rows=[all_labels.index(label) for label in manip_rows],
@@ -555,12 +600,20 @@ class Example:
                 
                 print('manip fd after select: ', manipulability_fd.shape)
 
-                # visualizing the autodiff manipulability
-                print('manipulability_ad: ')
-                labeled_matrix_print(manipulability_ad, manip_rows, manip_cols, precision=6)
-                # print(manipulability_ad)
-                print('manipulability_fd: ')
-                labeled_matrix_print(manipulability_fd, manip_rows, manip_cols, precision=6)
+                if self.args.move_obj:
+                    # visualizing the autodiff manipulability
+                    print('manipulability_ad: ')
+                    labeled_matrix_print(manipulability_ad.T, manip_cols, manip_rows, precision=6)
+                    # print(manipulability_ad)
+                    print('manipulability_fd: ')
+                    labeled_matrix_print(manipulability_fd.T, manip_cols, manip_rows, precision=6)
+                else:
+                    # visualizing the autodiff manipulability
+                    print('manipulability_ad: ')
+                    labeled_matrix_print(manipulability_ad, manip_rows, manip_cols, precision=6)
+                    # print(manipulability_ad)
+                    print('manipulability_fd: ')
+                    labeled_matrix_print(manipulability_fd, manip_rows, manip_cols, precision=6)
 
     
                 print('\n\n')
