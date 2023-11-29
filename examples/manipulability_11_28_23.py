@@ -60,16 +60,15 @@ class Example:
         parser.add_argument("--update_func", type=str, default="krishnan")
         self.args = parser.parse_args()
 
-        builder = wp.sim.ModelBuilder(gravity=0.0)
-        builder._ground_params["has_ground_collision"] = False
+        builder = wp.sim.ModelBuilder()
 
         self.enable_rendering = render
 
         self.scale = 0.8
 
         if self.args.update_func == "krishnan":
-            self.ke = 5.e7 # 1.e+2 # 1.e+5
-            self.kd = 1e3  # 250.0
+            self.ke = 3.e6 # 1.e+2 # 1.e+5
+            self.kd = 1e4  # 250.0
             self.kf = 1e3 # 0.5
             self.joint_target_ke = 1e8
             self.joint_target_kd = 1e6
@@ -120,8 +119,50 @@ class Example:
                 # density=1.e3  # 1000.0
             )
 
+            # builder.add_shape_box(
+            #     pos=(0.0, 0.0, 0.0),
+            #     hx=0.5 * self.scale,
+            #     hy=0.5 * self.scale,
+            #     hz=0.5 * self.scale,
+            #     body=index,
+            #     ke=self.ke,
+            #     kd=self.kd,
+            #     kf=self.kf,
+            #     density=1.e3  # 1000.0 
+            # )
+
+
             self.ball_list.append(index)
+
+        # # adding a small immobile cube to represent the goal
+        # cube_goal = builder.add_body(origin=wp.transform((4.0, 4.0, 4.0), wp.quat_identity()))
+
+        # builder.add_shape_box(
+        #     pos=(0.0, 0.0, 0.0),
+        #     hx=0.5 * self.scale,
+        #     hy=0.5 * self.scale,
+        #     hz=0.5 * self.scale,
+        #     body=cube_goal,
+        #     # ke=self.ke,
+        #     # kd=self.kd,
+        #     # kf=self.kf,
+        #     ke=0.0,
+        #     kd=0.0,
+        #     kf=0.0,
+        #     # is_solid=False,
+        # )
             
+        # ground box
+        builder.add_shape_box(
+            pos=(0.0, 0.0, 0.0),
+            hx=10.0*self.scale,
+            hy=0.1*self.scale,
+            hz=10.0*self.scale,
+            body=-1,
+            ke=self.ke,
+            kd=self.kd,
+            kf=self.kf)
+
         if self.args.no_control:
             # initial ball velocity
             # builder.body_qd[1] = (0.0, 0.0, 0.0, -5.0, 0.0, 0.0)
@@ -145,7 +186,6 @@ class Example:
                     )
 
         # finalize model
-        # self.model = builder.finalize(requires_grad=True)
         self.model = builder.finalize()
         self.model.ground = True
 
@@ -224,11 +264,17 @@ class Example:
         state_list=None,
         substeps=10,
         dt=1.0 / 60.0,
+        body_f=None,
+        joint_q=None,
+        joint_qd=None,
+        act_params: dict = None,
+        record_forward=False,
         ):
-
+        # if in graph capture mode, only use state_in and state_out
+        if record_forward:
+            state_list = [state_out for _ in range(substeps - 1)]
         # setup state_list if not provided
         if state_list is None or len(state_list) == 0:
-            # state_list = [model.state(requires_grad=True) for _ in range(substeps - 1)]
             state_list = [model.state() for _ in range(substeps - 1)]
 
         # run forward simulate substeps with integrator
@@ -242,8 +288,32 @@ class Example:
                 state_next,
                 dt,
             )
+            if state_next is not state_out:
+                state_next.clear_forces()
 
+        # # if body_f is included (to compute grads from body_f), copy (Euler) or integrate body_f (XPBD)
+        # if body_f is not None:
+        #     if isinstance(integrator, wp.sim.SemiImplicitIntegrator):
+        #         body_f.assign(state_list[1].body_f)  # takes instantaneous force from last substep
+        #     elif isinstance(integrator, wp.sim.XPBDIntegrator):
+        #         # captures applied joint torques
+        #         body_f.assign(state_out.body_f)
+        #         integrate_body_f(
+        #             model,
+        #             state_in.body_qd,
+        #             state_out.body_q,
+        #             state_out.body_qd,
+        #             body_f,
+        #             dt * substeps,
+        #         )
+        # if joint_q is not None:
+        #     wp.sim.eval_ik(model, state_out, joint_q, joint_qd)
+        # return state_out.body_q, state_out.body_qd, joint_q, joint_qd
+
+        # return state_list
         return state_out
+        # return state, state_out
+        # return state_next
 
     # from example_sim_grad_control.py
     def update_control(self, state: wp.sim.State, substeps, requires_grad=True) -> wp.sim.State:
@@ -308,6 +378,11 @@ class Example:
                 state_list=state_list,
                 substeps=substeps,
                 dt=dt,
+                body_f=body_f,
+                joint_q=joint_q,
+                joint_qd=joint_qd,
+                act_params=act_params,
+                record_forward=record_forward,
             )
         elif self.args.update_func == "control":
             return self.update_control(state=state_in, substeps=substeps, requires_grad=True)
@@ -366,6 +441,11 @@ class Example:
                     state_list=None,
                     substeps=substeps,
                     dt=self.sim_dt,
+                    body_f=None,
+                    joint_q=None,
+                    joint_qd=None,
+                    act_params=None,
+                    record_forward=False,
                 )
         
         return end_state
@@ -396,12 +476,12 @@ class Example:
         for i in range(action_dim):
             joint_target[i] = control_target[i]
 
-    def get_control_deltas(self, goal, curr_state, manipulability,  scale=.1, window_len=0):
+    def get_control_deltas(self, goal, curr_state, manipulability,  scale=.1, window_len=10):
         err = goal - curr_state
         print('goal error: ', err)
         action = err.T @ manipulability
         print('unnormalized action: ', action)
-        if np.linalg.norm(action) > 1e-5:
+        if np.linalg.norm(action) > 1e-6:
             action = action / np.linalg.norm(action) * scale
         else:
             action = np.zeros_like(action)
@@ -476,6 +556,11 @@ class Example:
                     state_list=None,
                     substeps=self.sim_substeps,
                     dt=self.sim_dt,
+                    body_f=None,
+                    joint_q=None,
+                    joint_qd=None,
+                    act_params=None,
+                    record_forward=False,
                 )
 
         # self.state_1 = self.update(self.state_0, requires_grad=True)
@@ -524,6 +609,11 @@ class Example:
                                     state_list=None,
                                     substeps=self.sim_substeps,
                                     dt=self.sim_dt,
+                                    body_f=None,
+                                    joint_q=None,
+                                    joint_qd=None,
+                                    act_params=None,
+                                    record_forward=False,
                                 )
                         
                         # self.state_1 = self.update(self.state_0, requires_grad=True)
@@ -578,12 +668,6 @@ class Example:
                     # print(manipulability_ad)
                     print('manipulability_fd: ')
                     labeled_matrix_print(manipulability_fd, manip_rows, manip_cols, precision=6)
-
-                matrix_to_heatmap(manipulability_fd, manip_rows, manip_cols, title="heatmap (fd)", vis=True)
-                matrix_to_heatmap(manipulability_ad, manip_rows, manip_cols, title="heatmap (ad)", vis=True)
-                # plot_eigenvalues(manipulability_ad, manip_rows, manip_cols, title="eigenvalues (ad)", vis=True)
-                # visualize_unit_ball(manipulability_ad, manip_rows, manip_cols, title="unit ball (ad)", vis=True)
-                cv2.waitKey(1)  # Small delay to display images
 
                 print('\n\n')
 
