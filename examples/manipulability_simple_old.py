@@ -51,8 +51,10 @@ class Example:
     def __init__(self, stage=None, render=True):
         parser = argparse.ArgumentParser()
         parser.add_argument("--no_control", action='store_true', default=False)
-        parser.add_argument("--use_ad", action='store_true', default=False)
+        parser.add_argument("--ad_control", action='store_true', default=False)
         parser.add_argument("--move_obj", action='store_true', default=False)
+        parser.add_argument("--skip_ad", action='store_true', default=False)
+        parser.add_argument("--skip_fd", action='store_true', default=False)
         parser.add_argument("--num_balls", type=int, default=1)
         parser.add_argument("--goal_x", type=float, default=0.)
         parser.add_argument("--goal_y", type=float, default=0.5)
@@ -66,13 +68,9 @@ class Example:
 
         self.scale = 0.8
 
-        self.ke = 5.e6 # 1.e+2 # 1.e+5
+        self.ke = 5.e7 # 1.e+2 # 1.e+5
         self.kd = 1e3  # 250.0
         self.kf = 1e3 # 0.5
-        # self.ke = 1.e+2
-        # self.kd = 250.0
-        # self.kf = 500.0
-        self.mu = 1.0
         self.joint_target_ke = 1e8
         self.joint_target_kd = 1e6
 
@@ -90,8 +88,7 @@ class Example:
             ke=self.ke,
             kd=self.kd,
             kf=self.kf,
-            mu=self.mu,
-            density=1.e2  # 1000.0 
+            density=1.e3  # 1000.0 
         )
 
         self.ball_list = []
@@ -110,8 +107,7 @@ class Example:
                 ke=self.ke,
                 kd=self.kd,
                 kf=self.kf,
-                mu=self.mu,
-                # density=5.e2  # 1000.0
+                # density=1.e3  # 1000.0
             )
 
             self.ball_list.append(index)
@@ -133,8 +129,8 @@ class Example:
                         axis=axis,
                         target=self.ball_pos[sphere_body][i],
                         limit_lower=-5.0, limit_upper=5.0,
-                        target_ke=self.joint_target_ke,  # Stiffness
-                        target_kd=self.joint_target_kd  # Damping
+                        target_ke=1e5,  # Stiffness
+                        target_kd=1e6  # Damping
                     )
 
         # finalize model
@@ -200,7 +196,7 @@ class Example:
         self.renderer.render(state)
         self.renderer.end_frame()
 
-    def update_for_jacobian(self, start_state, substeps=10):
+    def update_for_jacobian(self, start_state, substeps=2):
         end_state = self.model.state(requires_grad=True)
         self.update(model=self.model,
                     integrator=self.model.integrator,
@@ -235,7 +231,7 @@ class Example:
         for i in range(action_dim):
             joint_target[i] = control_target[i]
 
-    def get_control_deltas(self, goal, curr_state, manipulability,  scale=.1, window_len=1):
+    def get_control_deltas(self, goal, curr_state, manipulability,  scale=.1, window_len=0):
         err = goal - curr_state
         print('goal error: ', err)
         action = err.T @ manipulability
@@ -245,11 +241,14 @@ class Example:
         else:
             action = np.zeros_like(action)
 
-        # averaging the last window_len actions
-        self.action_list.append(action)
-        if len(self.action_list) > window_len:
-            self.action_list.pop(0)
-        final_action = np.mean(self.action_list, axis=0)
+        if window_len > 1:
+            # averaging the last window_len actions
+            self.action_list.append(action)
+            if len(self.action_list) > window_len:
+                self.action_list.pop(0)
+            final_action = np.mean(self.action_list, axis=0)
+        else:
+            final_action = action
 
         return wp.array(final_action, dtype=wp.float32)
 
@@ -267,16 +266,12 @@ class Example:
         all_labels = ['cube_x', 'cube_y', 'cube_z', 'cube_i', 'cube_j', 'cube_k', 'cube_w']
         all_labels += ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z', 'i', 'j', 'k', 'w']]
         
-        # if self.args.move_obj:
-        #     manip_rows = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # outputs
-        #     manip_cols = ['cube_x', 'cube_y', 'cube_z'] # inputs
-        # else:
-        #     manip_rows = ['cube_x', 'cube_y', 'cube_z'] # outputs
-        #     manip_cols = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # inputs
-
-        # manip_rows, manip_cols = all_labels, all_labels
-        manip_rows = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # outputs
-        manip_cols = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # outputs
+        if self.args.move_obj:
+            manip_rows = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # outputs
+            manip_cols = ['cube_x', 'cube_y', 'cube_z'] # inputs
+        else:
+            manip_rows = ['cube_x', 'cube_y', 'cube_z'] # outputs
+            manip_cols = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # inputs
 
         manipulability_ad = np.zeros((len(manip_rows), len(manip_cols)), dtype=np.float32)
         manipulability_fd = np.zeros((len(manip_rows), len(manip_cols)), dtype=np.float32)
@@ -307,7 +302,7 @@ class Example:
 
                 tape = wp.Tape()
                 with tape:
-                    if self.args.use_ad:
+                    if self.args.ad_control:
                         control_manipulability = manipulability_ad
                     else:
                         control_manipulability = manipulability_fd
@@ -318,7 +313,6 @@ class Example:
                         else:
                             control_deltas = self.get_control_deltas(self.cube_goal, output_state.body_q.numpy()[0][0:3], control_manipulability[:, 3:]) # ignoring the first 3 columns (cube position) for now TODO: simplify this
 
-                        # control_deltas = wp.array([0,0.05,0, 0,0.05,0], dtype=wp.float32) 
                         wp.launch(self.control_body_delta, dim=1, inputs=[control_deltas, self.model.joint_target, action_dim], outputs=[], device="cuda")
                         print('control_deltas: ', control_deltas)
 
@@ -334,26 +328,24 @@ class Example:
                                     dt=self.sim_dt,
                                 )
 
-            # if self.args.use_ad:
-                manipulability_ad = get_manipulability_ad(tape, dim=input_state.body_q.shape[0] * 7, input_state=input_state, output_state=output_state)
-                manipulability_ad = self.select_rows_cols(manipulability_ad,
-                                    rows=[all_labels.index(label) for label in manip_rows],
-                                    cols=[all_labels.index(label) for label in manip_cols]
-                                )
-            # else:
-                # setting stiffness and damping to 0 for the cube
-                self.model.joint_target_ke = wp.array([0., 0., 0., 0., 0., 0.], dtype=wp.float32)
-                self.model.joint_target_kd = wp.array([0., 0., 0., 0., 0., 0.], dtype=wp.float32)
-                # self.model.joint_enabled = wp.zeros(action_dim, dtype=wp.int32)
-                manipulability_fd = get_manipulability_fd_simplified(self.update_for_jacobian, input_state, dim=7, eps=1e-3, input_indices=[0, *self.ball_list], output_indices=[0, *self.ball_list])
-                self.model.joint_target_ke = wp.array([self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke], dtype=wp.float32)
-                self.model.joint_target_kd = wp.array([self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd], dtype=wp.float32)
-                # self.model.joint_enabled = wp.array(np.ones(action_dim), dtype=wp.int32)
-
-                manipulability_fd = self.select_rows_cols(manipulability_fd,
-                                    rows=[all_labels.index(label) for label in manip_rows],
-                                    cols=[all_labels.index(label) for label in manip_cols]
+                if not self.args.skip_ad:
+                    manipulability_ad = get_manipulability_ad(tape, dim=input_state.body_q.shape[0] * 7, input_state=input_state, output_state=output_state)
+                    manipulability_ad = self.select_rows_cols(manipulability_ad,
+                                        rows=[all_labels.index(label) for label in manip_rows],
+                                        cols=[all_labels.index(label) for label in manip_cols]
                                     )
+                else:
+                    # setting stiffness and damping to 0 for the cube
+                    self.model.joint_target_ke = wp.array([0., 0., 0., 0., 0., 0.], dtype=wp.float32)
+                    self.model.joint_target_kd = wp.array([0., 0., 0., 0., 0., 0.], dtype=wp.float32)
+                    manipulability_fd = get_manipulability_fd_composed(self.update_for_jacobian, input_state, eps=1e-2, input_indices=[0, *self.ball_list], output_indices=[0, *self.ball_list])
+                    self.model.joint_target_ke = wp.array([self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke], dtype=wp.float32)
+                    self.model.joint_target_kd = wp.array([self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd], dtype=wp.float32)
+
+                    manipulability_fd = self.select_rows_cols(manipulability_fd,
+                                        rows=[all_labels.index(label) for label in manip_rows],
+                                        cols=[all_labels.index(label) for label in manip_cols]
+                                        )
                     
                 if self.args.move_obj:
                     # visualizing the autodiff manipulability
@@ -375,8 +367,6 @@ class Example:
                 # plot_eigenvalues(manipulability_ad, manip_rows, manip_cols, title="eigenvalues (ad)", vis=True)
                 # visualize_unit_ball(manipulability_ad, manip_rows, manip_cols, title="unit ball (ad)", vis=True)
                 # cv2.waitKey(1)  # Small delay to display images
-
-                # print('checking:\n', (manipulability_fd - manipulability_ad) < 1e-4)
 
                 print('\n\n')
 
