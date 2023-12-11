@@ -55,7 +55,7 @@ class Example:
         parser.add_argument("--move_obj", action='store_true', default=False)
         parser.add_argument("--num_balls", type=int, default=1)
         parser.add_argument("--goal_x", type=float, default=0.)
-        parser.add_argument("--goal_y", type=float, default=0.5)
+        parser.add_argument("--goal_y", type=float, default=2.)
         parser.add_argument("--goal_z", type=float, default=0.)
         self.args = parser.parse_args()
 
@@ -77,29 +77,32 @@ class Example:
         self.joint_target_kd = 1e6
 
         self.num_balls = self.args.num_balls
+        self.obj_list = []
 
         # box (object that we want to manipulate)
-        cube1 = builder.add_body(origin=wp.transform((0.0, 0.5, 0.0), wp.quat_identity()))
+        cube_0 = builder.add_body(origin=wp.transform((0.0, 2., 0.0), wp.quat_identity()))
 
         builder.add_shape_box(
             pos=(0.0, 0.0, 0.0),
             hx=0.5 * self.scale,
             hy=0.5 * self.scale,
             hz=0.5 * self.scale,
-            body=cube1,
+            body=cube_0,
             ke=self.ke,
             kd=self.kd,
             kf=self.kf,
             mu=self.mu,
             density=1.e2  # 1000.0 
         )
+        self.obj_list.append('cube_0')
 
         self.ball_list = []
         self.ball_pos = {}
 
         # spheres (controllable objects)
         for i in range(self.num_balls):
-            ball_pos = (wp.cos(wp.pi * 2 * i / self.num_balls)*0.9, 0.5, wp.sin(wp.pi * 2 * i / self.num_balls)*0.9)
+            ball_pos = (wp.cos(wp.pi * 2 * i / self.num_balls)*0.9, 2., wp.sin(wp.pi * 2 * i / self.num_balls)*0.9)
+            # ball_pos = (wp.sin(wp.pi * 2 * i / self.num_balls)*0.9, wp.cos(wp.pi * 2 * i / self.num_balls)*0.9 + 2., 0.0)
             index = builder.add_body(origin=wp.transform(ball_pos, wp.quat_identity()))
             self.ball_pos[index] = ball_pos
 
@@ -115,6 +118,7 @@ class Example:
             )
 
             self.ball_list.append(index)
+            self.obj_list.append('ball_{}'.format(i))
             
         if self.args.no_control:
             # initial ball velocity
@@ -134,7 +138,8 @@ class Example:
                         target=self.ball_pos[sphere_body][i],
                         limit_lower=-5.0, limit_upper=5.0,
                         target_ke=self.joint_target_ke,  # Stiffness
-                        target_kd=self.joint_target_kd  # Damping
+                        target_kd=self.joint_target_kd,  # Damping
+                        name="joint_{}_{}".format(sphere_body, i),
                     )
 
         # finalize model
@@ -211,11 +216,6 @@ class Example:
                     dt=self.sim_dt,
                 )
         return end_state
-
-    def select_rows_cols(self, arr, rows, cols):
-        arr = arr[rows, :]
-        arr = arr[:, cols]
-        return arr
     
     @wp.kernel
     def control_body_delta(
@@ -252,7 +252,7 @@ class Example:
         final_action = np.mean(self.action_list, axis=0)
 
         return wp.array(final_action, dtype=wp.float32)
-
+    
     def run(self, render=True):
         # ---------------
         # run simulation
@@ -264,19 +264,23 @@ class Example:
 
         profiler = {}
 
-        all_labels = ['cube_x', 'cube_y', 'cube_z', 'cube_i', 'cube_j', 'cube_k', 'cube_w']
-        all_labels += ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z', 'i', 'j', 'k', 'w']]
+        all_labels = get_manip_labels(obj_list=self.obj_list, modalities=['pos', 'quat', 'vel', 'force'], indices=range(len(self.obj_list)))
+
+        input_modalities = ['pos']
+        output_modalities = ['pos']
+        # input_modalities = ['pos', 'force', 'vel']
+        # output_modalities = ['pos', 'force', 'vel']
         
-        # if self.args.move_obj:
-        #     manip_rows = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # outputs
-        #     manip_cols = ['cube_x', 'cube_y', 'cube_z'] # inputs
-        # else:
-        #     manip_rows = ['cube_x', 'cube_y', 'cube_z'] # outputs
-        #     manip_cols = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # inputs
+        input_indices = [i for i, obj in enumerate(self.obj_list) if 'ball' in obj]
+        output_indices = [i for i, obj in enumerate(self.obj_list) if 'cube' in obj]
+
+        manip_rows = get_manip_labels(obj_list=self.obj_list, modalities=output_modalities, indices=output_indices) # outputs (manually define these?)
+        manip_cols = get_manip_labels(obj_list=self.obj_list, modalities=input_modalities, indices=[*output_indices, *input_indices]) # inputs (manually define these?)
+        
+        if self.args.move_obj:
+            manip_rows, manip_cols = manip_cols, manip_rows
 
         # manip_rows, manip_cols = all_labels, all_labels
-        manip_rows = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # outputs
-        manip_cols = ['cube_x', 'cube_y', 'cube_z'] + ['ball{}_{}'.format(ball, axis) for ball in self.ball_list for axis in ['x', 'y', 'z']] # outputs
 
         manipulability_ad = np.zeros((len(manip_rows), len(manip_cols)), dtype=np.float32)
         manipulability_fd = np.zeros((len(manip_rows), len(manip_cols)), dtype=np.float32)
@@ -334,26 +338,19 @@ class Example:
                                     dt=self.sim_dt,
                                 )
 
-            # if self.args.use_ad:
-                manipulability_ad = get_manipulability_ad(tape, dim=input_state.body_q.shape[0] * 7, input_state=input_state, output_state=output_state)
-                manipulability_ad = self.select_rows_cols(manipulability_ad,
-                                    rows=[all_labels.index(label) for label in manip_rows],
-                                    cols=[all_labels.index(label) for label in manip_cols]
-                                )
-            # else:
+                # manipulability_ad = get_manipulability_ad_composed(tape, input_state, output_state, input_modalities, output_modalities,
+                #                                 all_labels, manip_rows, manip_cols)
+                
                 # setting stiffness and damping to 0 for the cube
                 self.model.joint_target_ke = wp.array([0., 0., 0., 0., 0., 0.], dtype=wp.float32)
                 self.model.joint_target_kd = wp.array([0., 0., 0., 0., 0., 0.], dtype=wp.float32)
                 # self.model.joint_enabled = wp.zeros(action_dim, dtype=wp.int32)
-                manipulability_fd = get_manipulability_fd_simplified(self.update_for_jacobian, input_state, dim=7, eps=1e-3, input_indices=[0, *self.ball_list], output_indices=[0, *self.ball_list])
+                manipulability_fd = get_manipulability_fd_simplified(self.update_for_jacobian, input_state, eps=1e-3,
+                                                                     input_indices=input_indices, output_indices=output_indices, all_labels=all_labels,
+                                                                     manip_rows=manip_rows, manip_cols=manip_cols, input_modalities=input_modalities, output_modalities=output_modalities)
                 self.model.joint_target_ke = wp.array([self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke, self.joint_target_ke], dtype=wp.float32)
                 self.model.joint_target_kd = wp.array([self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd, self.joint_target_kd], dtype=wp.float32)
                 # self.model.joint_enabled = wp.array(np.ones(action_dim), dtype=wp.int32)
-
-                manipulability_fd = self.select_rows_cols(manipulability_fd,
-                                    rows=[all_labels.index(label) for label in manip_rows],
-                                    cols=[all_labels.index(label) for label in manip_cols]
-                                    )
                     
                 if self.args.move_obj:
                     # visualizing the autodiff manipulability
@@ -377,6 +374,10 @@ class Example:
                 # cv2.waitKey(1)  # Small delay to display images
 
                 # print('checking:\n', (manipulability_fd - manipulability_ad) < 1e-4)
+
+                print('cube pos: ', output_state.body_q.numpy()[0])
+                print('cube vel: ', output_state.body_qd.numpy()[0])
+                print('cube force: ', output_state.body_f.numpy()[0])
 
                 print('\n\n')
 
